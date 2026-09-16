@@ -282,7 +282,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
         'adminJoinedAt': FieldValue.serverTimestamp(),
       });
 
-      final roomUrl = 'http://localhost:8000/live-session?sessionId=$sessionId&role=admin'; // ✨ تم تحديث الرابط لسيرفر FastAPI
+      final roomUrl = 'https://labbeeb-wep.onrender.com/live-session?sessionId=$sessionId&role=admin';
       html.window.open(roomUrl, '_blank');
 
     } catch (e) {
