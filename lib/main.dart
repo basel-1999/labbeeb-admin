@@ -1594,11 +1594,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                                     icon: const Icon(Icons.check_circle, color: Colors.green, size: 30),
                                     tooltip: 'قبول الشحن وإضافة النقاط للطالب',
                                     onPressed: () async {
+                                      // ✨ نمسك مرجع ScaffoldMessenger فوراً وقبل أي await، لأن هذا العنصر
+                                      // رح يُحذف من القائمة أول ما تتغير حالة الطلب (الستريم مفلتر على pending)
+                                      // فإذا انتظرنا واستخدمنا context بعد الـ await، بيكون العنصر انحذف من الشجرة
+                                      final messenger = ScaffoldMessenger.of(context);
+
                                       // ✨ حماية قاطعة من النقر المزدوج
                                       final reqRef = FirebaseFirestore.instance.collection('recharge_requests').doc(docId);
                                       final reqSnap = await reqRef.get();
                                       if (reqSnap.exists && reqSnap.data()?['status'] == 'approved') {
-                                        ScaffoldMessenger.of(context).showSnackBar(
+                                        messenger.showSnackBar(
                                           const SnackBar(content: Text('تمت الموافقة على هذا الطلب مسبقاً'), backgroundColor: Colors.orange),
                                         );
                                         return;
@@ -1624,17 +1629,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                                           'approvedAt': FieldValue.serverTimestamp(),
                                         });
 
-                                        if (mounted) {
-                                          ScaffoldMessenger.of(context).showSnackBar(
-                                            SnackBar(content: Text('✅ تم شحن $pointsCount نقطة للطالب $studentName بنجاح!')),
-                                          );
-                                        }
+                                        messenger.showSnackBar(
+                                          SnackBar(content: Text('✅ تم شحن $pointsCount نقطة للطالب $studentName بنجاح!')),
+                                        );
                                       } catch (e) {
-                                        if (mounted) {
-                                          ScaffoldMessenger.of(context).showSnackBar(
-                                            SnackBar(content: Text('❌ خطأ في الشحن: $e'), backgroundColor: Colors.red),
-                                          );
-                                        }
+                                        messenger.showSnackBar(
+                                          SnackBar(content: Text('❌ خطأ في الشحن: $e'), backgroundColor: Colors.red),
+                                        );
                                       }
                                     },
                                   ),
