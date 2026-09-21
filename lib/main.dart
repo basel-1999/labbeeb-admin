@@ -461,6 +461,46 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                           );
                         },
                       ),
+                      const SizedBox(height: 12),
+                      const Text('🏅 أقوى شهادة خبرة:', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF2C3A2B))),
+                      const SizedBox(height: 8),
+                      Builder(
+                        builder: (context) {
+                          final String expUrl = initialData['experienceCertificateUrl'] ?? '';
+                          final String expFileName = initialData['experienceCertificateName'] ?? 'شهادة الخبرة المرفقة';
+
+                          if (expUrl.isEmpty) {
+                            return const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 4.0),
+                              child: Text('لم يقم المعلم برفع شهادة خبرة بعد.', style: TextStyle(color: Colors.grey, fontSize: 13)),
+                            );
+                          }
+
+                          final bool isExpUrl = expUrl.startsWith('http://') || expUrl.startsWith('https://');
+
+                          return Container(
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              border: Border.all(color: Colors.grey.shade300),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: ListTile(
+                              dense: true,
+                              leading: const Icon(Icons.workspace_premium, color: Colors.amber),
+                              title: Text(expFileName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                              subtitle: Text(expUrl, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: Colors.blue)),
+                              trailing: ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(backgroundColor: Colors.amber.shade800, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4)),
+                                icon: const Icon(Icons.open_in_new, size: 12),
+                                label: const Text('معاينة شهادة الخبرة', style: TextStyle(fontSize: 11)),
+                                onPressed: () {
+                                  if (isExpUrl) html.window.open(expUrl, '_blank');
+                                },
+                              ),
+                            ),
+                          );
+                        },
+                      ),
                     ],
                   ],
                 ),
@@ -1263,6 +1303,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                                 if (role == 'teacher') ...[
                                   Text('التخصصات: ${data['subjects']?.join(', ') ?? 'غير محدد'}', style: const TextStyle(fontSize: 13)),
                                   Text('الفئات العمرية: ${data['targetAge']?.join(', ') ?? 'غير محدد'}', style: const TextStyle(fontSize: 13)),
+                                  // ✨ إضافة لغة التدريس هنا
+                                  Text('لغة التدريس: ${data['teachingLanguage'] ?? 'غير محدد'}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                                  // ✨ إضافة الأجهزة المملوكة هنا
+                                  Text('الأجهزة المتاحة: ${data['ownedDevices'] != null ? (data['ownedDevices'] as List).join('، ') : 'غير محدد'}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
                                   const SizedBox(height: 8),
                                   // ✨ إظهار الشهادة بجانب الهوية
                                   if (certUrl != null)
@@ -1278,6 +1322,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                                       title: const Text('عرض الهوية الشخصية'),
                                       trailing: const Icon(Icons.open_in_new),
                                       onTap: () => html.window.open(data['identityUrl'], '_blank'),
+                                    ),
+                                  if (data['experienceCertificateUrl'] != null)
+                                    ListTile(
+                                      leading: const Icon(Icons.workspace_premium, color: Colors.amber),
+                                      title: const Text('عرض شهادة الخبرة'),
+                                      trailing: const Icon(Icons.open_in_new),
+                                      onTap: () => html.window.open(data['experienceCertificateUrl'], '_blank'),
                                     ),
                                 ] else if (role == 'student') ...[
                                   Text('المرحلة الدراسية: ${data['grade'] ?? 'غير محدد'}', style: const TextStyle(fontSize: 13)),
