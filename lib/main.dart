@@ -501,6 +501,45 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                           );
                         },
                       ),
+                      const SizedBox(height: 12),
+                      const Text('🧑‍🏫 شهادة الدرجة العلمية العليا (إن وجدت):', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF2C3A2B))),
+                      const SizedBox(height: 8),
+                      Builder(
+                        builder: (context) {
+                          final String advDegUrl = initialData['advancedDegreeCertificateUrl'] ?? '';
+
+                          if (advDegUrl.isEmpty) {
+                            return const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 4.0),
+                              child: Text('لا توجد شهادة درجة عليا مرفقة.', style: TextStyle(color: Colors.grey, fontSize: 13)),
+                            );
+                          }
+
+                          final bool isAdvDegUrl = advDegUrl.startsWith('http://') || advDegUrl.startsWith('https://');
+
+                          return Container(
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              border: Border.all(color: Colors.grey.shade300),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: ListTile(
+                              dense: true,
+                              leading: const Icon(Icons.school, color: Colors.purple),
+                              title: const Text('شهادة (الماجستير/الدكتوراه)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                              subtitle: Text(advDegUrl, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: Colors.blue)),
+                              trailing: ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(backgroundColor: Colors.purple, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4)),
+                                icon: const Icon(Icons.open_in_new, size: 12),
+                                label: const Text('معاينة الشهادة', style: TextStyle(fontSize: 11)),
+                                onPressed: () {
+                                  if (isAdvDegUrl) html.window.open(advDegUrl, '_blank');
+                                },
+                              ),
+                            ),
+                          );
+                        },
+                      ),
                     ],
                   ],
                 ),
@@ -1307,6 +1346,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                                   Text('لغة التدريس: ${data['teachingLanguage'] ?? 'غير محدد'}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
                                   // ✨ إضافة الأجهزة المملوكة هنا
                                   Text('الأجهزة المتاحة: ${data['ownedDevices'] != null ? (data['ownedDevices'] as List).join('، ') : 'غير محدد'}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                                  // ✨ إضافة الدرجة العلمية هنا (جديد)
+                                  Text('الدرجة العلمية العليا: ${data['academicDegree'] ?? 'لا يوجد'}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
                                   const SizedBox(height: 8),
                                   // ✨ إظهار الشهادة بجانب الهوية
                                   if (certUrl != null)
@@ -1329,6 +1370,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                                       title: const Text('عرض شهادة الخبرة'),
                                       trailing: const Icon(Icons.open_in_new),
                                       onTap: () => html.window.open(data['experienceCertificateUrl'], '_blank'),
+                                    ),
+                                  // ✨ إظهار شهادة الدرجة العليا (جديد)
+                                  if (data['advancedDegreeCertificateUrl'] != null)
+                                    ListTile(
+                                      leading: const Icon(Icons.school, color: Colors.purple),
+                                      title: const Text('عرض شهادة الدرجة العلمية العليا'),
+                                      trailing: const Icon(Icons.open_in_new),
+                                      onTap: () => html.window.open(data['advancedDegreeCertificateUrl'], '_blank'),
                                     ),
                                 ] else if (role == 'student') ...[
                                   Text('المرحلة الدراسية: ${data['grade'] ?? 'غير محدد'}', style: const TextStyle(fontSize: 13)),
