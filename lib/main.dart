@@ -1008,7 +1008,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
             ),
             // تبويب 2: إدارة الحسابات
             StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance.collection('users').where('status', isEqualTo: 'pending_approval').snapshots(),
+              stream: FirebaseFirestore.instance.collection('users').where('status', whereIn: ['pending_approval', 'pending_profile_update']).snapshots(),
               builder: (context, snapshot) {
                 int count = snapshot.data?.docs.length ?? 0;
                 return Tab(
@@ -1229,6 +1229,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
   }
 
   // 2. إدارة المستخدمين والأدوار (تم الإصلاح: إظهار الشهادة دائماً بجانب الهوية)
+  // 2. إدارة المستخدمين والأدوار (تم الإصلاح: تقسيم المعلمين لثلاثة أقسام مع شارات التنبيه)
   Widget _buildUserManagementTab() {
     return Padding(
       padding: const EdgeInsets.all(24.0),
@@ -1248,17 +1249,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
             ],
           ),
           const SizedBox(height: 16),
-          // أزرار الفلترة
-          Wrap(
-            spacing: 8,
-            children: [
-              FilterChip(label: const Text('الكل'), selected: _userFilter == 'all', onSelected: (v) => setState(() => _userFilter = 'all')),
-              FilterChip(label: const Text('طلاب'), selected: _userFilter == 'student', onSelected: (v) => setState(() => _userFilter = 'student')),
-              FilterChip(label: const Text('معلمين'), selected: _userFilter == 'teacher', onSelected: (v) => setState(() => _userFilter = 'teacher')),
-              FilterChip(label: const Text('أدمن'), selected: _userFilter == 'admin', onSelected: (v) => setState(() => _userFilter = 'admin')),
-            ],
-          ),
-          const SizedBox(height: 16),
+          // ✨ أزرار الفلترة الجديدة مع الشارات (Badges)
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
               stream: FirebaseFirestore.instance.collection('users').snapshots(),
@@ -1267,166 +1258,329 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                   return Center(child: Text('حدث خطأ أثناء جلب البيانات: ${snapshot.error}'));
                 }
 
-                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                  return const Center(child: Text('لا يوجد مستخدمون حالياً في قاعدة البيانات.'));
+                if (!snapshot.hasData) {
+                  return const Center(child: CircularProgressIndicator());
                 }
 
-                var docs = snapshot.data!.docs.where((doc) {
-                  final role = (doc.data() as Map<String, dynamic>)['role'] ?? 'student';
-                  return _userFilter == 'all' ? true : role == _userFilter;
-                }).toList();
+                // ✨ حساب أعداد كل قسم لعرضها كشارات (Badges)
+                int updatesCount = 0;
+                int pendingTeachersCount = 0;
 
-                docs.sort((a, b) {
-                  final aData = a.data() as Map<String, dynamic>;
-                  final bData = b.data() as Map<String, dynamic>;
-                  final aTime = aData['createdAt'] as Timestamp?;
-                  final bTime = bData['createdAt'] as Timestamp?;
-                  if (aTime == null && bTime == null) return 0;
-                  if (aTime == null) return 1;
-                  if (bTime == null) return -1;
-                  return bTime.compareTo(aTime);
-                });
+                for (var doc in snapshot.data!.docs) {
+                  final data = doc.data() as Map<String, dynamic>;
+                  if (data['status'] == 'pending_profile_update') {
+                    updatesCount++;
+                  } else if (data['role'] == 'teacher' && (data['status'] == 'pending_approval' || data['status'] == 'pending_review')) {
+                    pendingTeachersCount++;
+                  }
+                }
 
-                return ListView.builder(
-                  itemCount: docs.length,
-                  itemBuilder: (context, index) {
-                    final data = docs[index].data() as Map<String, dynamic>;
-                    final docId = docs[index].id;
-                    final role = data['role'] ?? 'student';
-                    final status = data['status'] ?? data['accountStatus'] ?? 'approved';
-                    final isAvailable = data['isAvailable'] == true;
-                    final isPendingTeacher = role == 'teacher' &&
-                        (status == 'pending_approval' || status == 'pending' || status == 'pending_review' || !isAvailable);
-
-                    // ✨ استخراج رابط الشهادة (سواء من certificateUrl أو من مصفوفة certificates)
-                    String? certUrl = data['certificateUrl'];
-                    if (certUrl == null && data['certificates'] != null && (data['certificates'] as List).isNotEmpty) {
-                      var cert = (data['certificates'] as List).first;
-                      if (cert is Map) {
-                        certUrl = cert['fileUrl'] ?? cert['url'];
-                      } else if (cert is String) {
-                        certUrl = cert;
-                      }
-                    }
-
-                    return Card(
-                      color: isPendingTeacher ? Colors.orange.shade50 : Colors.white,
-                      margin: const EdgeInsets.only(bottom: 12),
-                      child: ExpansionTile(
-                        leading: CircleAvatar(
-                          backgroundColor: role == 'teacher'
-                              ? const Color(0xFF2C3A2B)
-                              : (role == 'admin' ? Colors.purple : const Color(0xFFE07A5F)),
-                          child: Text(role.isNotEmpty ? role[0].toUpperCase() : 'U', style: const TextStyle(color: Colors.white)),
+                return Column(
+                  children: [
+                    Wrap(
+                      alignment: WrapAlignment.spaceBetween,
+                      spacing: 16,
+                      runSpacing: 12,
+                      children: [
+                        FilterChip(label: const Text('الكل'), selected: _userFilter == 'all', onSelected: (v) => setState(() => _userFilter = 'all')),
+                        FilterChip(label: const Text('طلاب'), selected: _userFilter == 'students', onSelected: (v) => setState(() => _userFilter = 'students')),
+                        FilterChip(label: const Text('معلمين مقبولين'), selected: _userFilter == 'teachers_approved', onSelected: (v) => setState(() => _userFilter = 'teachers_approved')),
+                        Badge(
+                          label: Text('$pendingTeachersCount', style: const TextStyle(color: Colors.white, fontSize: 10)),
+                          isLabelVisible: pendingTeachersCount > 0,
+                          backgroundColor: Colors.red,
+                          child: FilterChip(
+                            label: const Text('معلمين قيد المراجعة'),
+                            selected: _userFilter == 'teachers_pending',
+                            onSelected: (v) => setState(() => _userFilter = 'teachers_pending'),
+                          ),
                         ),
-                        title: Row(
-                          children: [
-                            Text('${data['name'] ?? 'مستخدم جديد'} (الدور: $role)'),
-                            if (isPendingTeacher) ...[
-                              const SizedBox(width: 8),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                decoration: BoxDecoration(color: Colors.orange, borderRadius: BorderRadius.circular(12)),
-                                child: const Text('طلب انضمام معلم معلق ⏳', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
-                              ),
-                            ]
-                          ],
+                        Badge(
+                          label: Text('$updatesCount', style: const TextStyle(color: Colors.white, fontSize: 10)),
+                          isLabelVisible: updatesCount > 0,
+                          backgroundColor: Colors.purple,
+                          child: FilterChip(
+                            label: const Text('طلبات تعديل المعلمين'),
+                            selected: _userFilter == 'teachers_updates',
+                            onSelected: (v) => setState(() => _userFilter = 'teachers_updates'),
+                          ),
                         ),
-                        subtitle: Text('الهاتف: ${data['phone'] ?? 'غير محدد'}'),
-                        children: [
-                          Padding(
-                            padding: const EdgeInsets.all(16.0),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                if (role == 'teacher') ...[
-                                  Text('التخصصات: ${data['subjects']?.join(', ') ?? 'غير محدد'}', style: const TextStyle(fontSize: 13)),
-                                  Text('الفئات العمرية: ${data['targetAge']?.join(', ') ?? 'غير محدد'}', style: const TextStyle(fontSize: 13)),
-                                  // ✨ إضافة لغة التدريس هنا
-                                  Text('لغة التدريس: ${data['teachingLanguage'] ?? 'غير محدد'}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
-                                  // ✨ إضافة الأجهزة المملوكة هنا
-                                  Text('الأجهزة المتاحة: ${data['ownedDevices'] != null ? (data['ownedDevices'] as List).join('، ') : 'غير محدد'}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
-                                  // ✨ إضافة الدرجة العلمية هنا (جديد)
-                                  Text('الدرجة العلمية العليا: ${data['academicDegree'] ?? 'لا يوجد'}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
-                                  const SizedBox(height: 8),
-                                  // ✨ إظهار الشهادة بجانب الهوية
-                                  if (certUrl != null)
-                                    ListTile(
-                                      leading: const Icon(Icons.picture_as_pdf, color: Colors.red),
-                                      title: const Text('عرض الشهادة الجامعية'),
-                                      trailing: const Icon(Icons.open_in_new),
-                                      onTap: () => html.window.open(certUrl!, '_blank'),
-                                    ),
-                                  if (data['identityUrl'] != null)
-                                    ListTile(
-                                      leading: const Icon(Icons.badge, color: Colors.indigo),
-                                      title: const Text('عرض الهوية الشخصية'),
-                                      trailing: const Icon(Icons.open_in_new),
-                                      onTap: () => html.window.open(data['identityUrl'], '_blank'),
-                                    ),
-                                  if (data['experienceCertificateUrl'] != null)
-                                    ListTile(
-                                      leading: const Icon(Icons.workspace_premium, color: Colors.amber),
-                                      title: const Text('عرض شهادة الخبرة'),
-                                      trailing: const Icon(Icons.open_in_new),
-                                      onTap: () => html.window.open(data['experienceCertificateUrl'], '_blank'),
-                                    ),
-                                  // ✨ إظهار شهادة الدرجة العليا (جديد)
-                                  if (data['advancedDegreeCertificateUrl'] != null)
-                                    ListTile(
-                                      leading: const Icon(Icons.school, color: Colors.purple),
-                                      title: const Text('عرض شهادة الدرجة العلمية العليا'),
-                                      trailing: const Icon(Icons.open_in_new),
-                                      onTap: () => html.window.open(data['advancedDegreeCertificateUrl'], '_blank'),
-                                    ),
-                                ] else if (role == 'student') ...[
-                                  Text('المرحلة الدراسية: ${data['grade'] ?? 'غير محدد'}', style: const TextStyle(fontSize: 13)),
-                                  Text('الرصيد: ${data['points'] ?? 0} نقطة', style: const TextStyle(fontSize: 13)),
-                                ],
-                                const SizedBox(height: 12),
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.end,
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Expanded(
+                      child: Builder(
+                        builder: (context) {
+                          if (snapshot.data!.docs.isEmpty) {
+                            return const Center(child: Text('لا يوجد مستخدمون حالياً في قاعدة البيانات.'));
+                          }
+
+                          // ✨ فلترة القائمة بناءً على الاختيار
+                          var docs = snapshot.data!.docs.where((doc) {
+                            final data = doc.data() as Map<String, dynamic>;
+                            final role = data['role'] ?? 'student';
+                            final status = data['status'] ?? 'approved';
+
+                            if (_userFilter == 'all') return true;
+                            if (_userFilter == 'students') return role == 'student';
+                            if (_userFilter == 'teachers_approved') return role == 'teacher' && status == 'approved';
+                            if (_userFilter == 'teachers_pending') return role == 'teacher' && (status == 'pending_approval' || status == 'pending_review');
+                            if (_userFilter == 'teachers_updates') return status == 'pending_profile_update';
+
+                            return false;
+                          }).toList();
+
+                          docs.sort((a, b) {
+                            final aData = a.data() as Map<String, dynamic>;
+                            final bData = b.data() as Map<String, dynamic>;
+                            final aTime = aData['createdAt'] as Timestamp?;
+                            final bTime = bData['createdAt'] as Timestamp?;
+                            if (aTime == null && bTime == null) return 0;
+                            if (aTime == null) return 1;
+                            if (bTime == null) return -1;
+                            return bTime.compareTo(aTime);
+                          });
+
+                          if (docs.isEmpty) {
+                            return Center(child: Text('لا يوجد مستخدمون في قسم "$_userFilter" حالياً.'));
+                          }
+
+                          return ListView.builder(
+                            itemCount: docs.length,
+                            itemBuilder: (context, index) {
+                              final data = docs[index].data() as Map<String, dynamic>;
+                              final docId = docs[index].id;
+                              final role = data['role'] ?? 'student';
+                              final status = data['status'] ?? data['accountStatus'] ?? 'approved';
+                              final isAvailable = data['isAvailable'] == true;
+                              final isPendingTeacher = role == 'teacher' &&
+                                  (status == 'pending_approval' || status == 'pending' || status == 'pending_review' || !isAvailable);
+
+                              final pendingUpdates = data['pendingProfileUpdates'] as Map<String, dynamic>?;
+                              final isPendingUpdate = status == 'pending_profile_update' && pendingUpdates != null;
+
+                              String? certUrl = data['certificateUrl'];
+                              if (certUrl == null && data['certificates'] != null && (data['certificates'] as List).isNotEmpty) {
+                                var cert = (data['certificates'] as List).first;
+                                if (cert is Map) {
+                                  certUrl = cert['fileUrl'] ?? cert['url'];
+                                } else if (cert is String) {
+                                  certUrl = cert;
+                                }
+                              }
+
+                              return Card(
+                                color: isPendingUpdate ? Colors.purple.shade50 : (isPendingTeacher ? Colors.orange.shade50 : Colors.white),
+                                margin: const EdgeInsets.only(bottom: 12),
+                                child: ExpansionTile(
+                                  leading: CircleAvatar(
+                                    backgroundColor: role == 'teacher'
+                                        ? const Color(0xFF2C3A2B)
+                                        : (role == 'admin' ? Colors.purple : const Color(0xFFE07A5F)),
+                                    child: Text(role.isNotEmpty ? role[0].toUpperCase() : 'U', style: const TextStyle(color: Colors.white)),
+                                  ),
+                                  title: Row(
+                                    children: [
+                                      Text('${data['name'] ?? 'مستخدم جديد'} (الدور: $role)'),
+                                      if (isPendingTeacher) ...[
+                                        const SizedBox(width: 8),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                          decoration: BoxDecoration(color: Colors.orange, borderRadius: BorderRadius.circular(12)),
+                                          child: const Text('طلب انضمام معلم معلق ⏳', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                                        ),
+                                      ],
+                                      if (isPendingUpdate) ...[
+                                        const SizedBox(width: 8),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                          decoration: BoxDecoration(color: Colors.purple, borderRadius: BorderRadius.circular(12)),
+                                          child: const Text('طلب تعديل بيانات ⏳', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                                        ),
+                                      ]
+                                    ],
+                                  ),
+                                  subtitle: Text('الهاتف: ${data['phone'] ?? 'غير محدد'}'),
                                   children: [
-                                    if (isPendingTeacher) ...[
-                                      ElevatedButton.icon(
-                                        style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
-                                        icon: const Icon(Icons.check, size: 16),
-                                        label: const Text('قبول المعلم'),
-                                        onPressed: () async {
-                                          await FirebaseFirestore.instance.collection('users').doc(docId).update({
-                                            'role': 'teacher',
-                                            'status': 'approved',
-                                            'accountStatus': 'approved',
-                                            'isAvailable': true,
-                                          });
-                                        },
+                                    Padding(
+                                      padding: const EdgeInsets.all(16.0),
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          if (isPendingUpdate) ...[
+                                            Container(
+                                              padding: const EdgeInsets.all(12),
+                                              margin: const EdgeInsets.only(bottom: 12),
+                                              decoration: BoxDecoration(color: Colors.purple.shade50, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.purple.shade200)),
+                                              child: const Row(
+                                                children: [
+                                                  Icon(Icons.system_update, color: Colors.purple, size: 18),
+                                                  SizedBox(width: 8),
+                                                  Expanded(child: Text('هذا المعلم طلب تحديث بياناته. راجع البيانات بالأسفل.', style: TextStyle(color: Colors.purple, fontWeight: FontWeight.bold, fontSize: 13))),
+                                                ],
+                                              ),
+                                            ),
+                                          ],
+                                          if (role == 'teacher') ...[
+                                            if (isPendingUpdate) ...[
+                                              Text('الاسم الجديد المطلوب: ${pendingUpdates!['name'] ?? data['name']}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                                              Text('الدولة/المدينة: ${pendingUpdates['country'] ?? data['country']} - ${pendingUpdates['city'] ?? data['city']}', style: const TextStyle(fontSize: 13)),
+                                              Text('التخصصات الجديدة: ${pendingUpdates['subjects'] != null ? (pendingUpdates['subjects'] as List).join('، ') : 'لم يتغير'}', style: const TextStyle(fontSize: 13)),
+                                              Text('الفئات العمرية: ${pendingUpdates['targetAge'] != null ? (pendingUpdates['targetAge'] as List).join('، ') : 'لم يتغير'}', style: const TextStyle(fontSize: 13)),
+                                              Text('لغة التدريس: ${pendingUpdates['teachingLanguage'] ?? data['teachingLanguage']}', style: const TextStyle(fontSize: 13)),
+                                              Text('الدرجة العلمية: ${pendingUpdates['academicDegree'] ?? data['academicDegree']}', style: const TextStyle(fontSize: 13)),
+                                              const SizedBox(height: 8),
+                                              const Text('الوثائق الجديدة المرفقة (إن وجدت):', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                                              if (pendingUpdates['certificateUrl'] != null)
+                                                ListTile(
+                                                  leading: const Icon(Icons.picture_as_pdf, color: Colors.red),
+                                                  title: const Text('عرض الشهادة الجامعية الجديدة', style: TextStyle(fontSize: 13)),
+                                                  trailing: const Icon(Icons.open_in_new, size: 16),
+                                                  onTap: () => html.window.open(pendingUpdates['certificateUrl'], '_blank'),
+                                                ),
+                                              if (pendingUpdates['identityUrl'] != null)
+                                                ListTile(
+                                                  leading: const Icon(Icons.badge, color: Colors.indigo),
+                                                  title: const Text('عرض الهوية الجديدة', style: TextStyle(fontSize: 13)),
+                                                  trailing: const Icon(Icons.open_in_new, size: 16),
+                                                  onTap: () => html.window.open(pendingUpdates['identityUrl'], '_blank'),
+                                                ),
+                                              if (pendingUpdates['advancedDegreeCertificateUrl'] != null)
+                                                ListTile(
+                                                  leading: const Icon(Icons.school, color: Colors.purple),
+                                                  title: const Text('عرض شهادة الماجستير/الدكتوراه الجديدة', style: TextStyle(fontSize: 13)),
+                                                  trailing: const Icon(Icons.open_in_new, size: 16),
+                                                  onTap: () => html.window.open(pendingUpdates['advancedDegreeCertificateUrl'], '_blank'),
+                                                ),
+                                            ] else ...[
+                                              Text('التخصصات: ${data['subjects']?.join(', ') ?? 'غير محدد'}', style: const TextStyle(fontSize: 13)),
+                                              Text('الفئات العمرية: ${data['targetAge']?.join(', ') ?? 'غير محدد'}', style: const TextStyle(fontSize: 13)),
+                                              Text('لغة التدريس: ${data['teachingLanguage'] ?? 'غير محدد'}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                                              Text('الأجهزة المتاحة: ${data['ownedDevices'] != null ? (data['ownedDevices'] as List).join('، ') : 'غير محدد'}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                                              Text('الدرجة العلمية العليا: ${data['academicDegree'] ?? 'لا يوجد'}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                                              const SizedBox(height: 8),
+                                              if (certUrl != null)
+                                                ListTile(
+                                                  leading: const Icon(Icons.picture_as_pdf, color: Colors.red),
+                                                  title: const Text('عرض الشهادة الجامعية'),
+                                                  trailing: const Icon(Icons.open_in_new),
+                                                  onTap: () => html.window.open(certUrl!, '_blank'),
+                                                ),
+                                              if (data['identityUrl'] != null)
+                                                ListTile(
+                                                  leading: const Icon(Icons.badge, color: Colors.indigo),
+                                                  title: const Text('عرض الهوية الشخصية'),
+                                                  trailing: const Icon(Icons.open_in_new),
+                                                  onTap: () => html.window.open(data['identityUrl'], '_blank'),
+                                                ),
+                                              if (data['experienceCertificateUrl'] != null)
+                                                ListTile(
+                                                  leading: const Icon(Icons.workspace_premium, color: Colors.amber),
+                                                  title: const Text('عرض شهادة الخبرة'),
+                                                  trailing: const Icon(Icons.open_in_new),
+                                                  onTap: () => html.window.open(data['experienceCertificateUrl'], '_blank'),
+                                                ),
+                                              if (data['advancedDegreeCertificateUrl'] != null)
+                                                ListTile(
+                                                  leading: const Icon(Icons.school, color: Colors.purple),
+                                                  title: const Text('عرض شهادة الدرجة العلمية العليا'),
+                                                  trailing: const Icon(Icons.open_in_new),
+                                                  onTap: () => html.window.open(data['advancedDegreeCertificateUrl'], '_blank'),
+                                                ),
+                                            ],
+                                          ] else if (role == 'student') ...[
+                                            Text('المرحلة الدراسية: ${data['grade'] ?? 'غير محدد'}', style: const TextStyle(fontSize: 13)),
+                                            Text('الرصيد: ${data['points'] ?? 0} نقطة', style: const TextStyle(fontSize: 13)),
+                                          ],
+                                          const SizedBox(height: 12),
+                                          Row(
+                                            mainAxisAlignment: MainAxisAlignment.end,
+                                            children: [
+                                              if (isPendingUpdate) ...[
+                                                ElevatedButton.icon(
+                                                  style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
+                                                  icon: const Icon(Icons.check, size: 16),
+                                                  label: const Text('قبول التعديلات'),
+                                                  onPressed: () async {
+                                                    await FirebaseFirestore.instance.collection('users').doc(docId).update({
+                                                      'name': pendingUpdates!['name'] ?? data['name'],
+                                                      'country': pendingUpdates['country'] ?? data['country'],
+                                                      'city': pendingUpdates['city'] ?? data['city'],
+                                                      'subjects': pendingUpdates['subjects'] ?? data['subjects'],
+                                                      'targetAge': pendingUpdates['targetAge'] ?? data['targetAge'],
+                                                      'teachingLanguage': pendingUpdates['teachingLanguage'] ?? data['teachingLanguage'],
+                                                      'ownedDevices': pendingUpdates['ownedDevices'] ?? data['ownedDevices'],
+                                                      'academicDegree': pendingUpdates['academicDegree'] ?? data['academicDegree'],
+                                                      if (pendingUpdates['certificateUrl'] != null) 'certificateUrl': pendingUpdates['certificateUrl'],
+                                                      if (pendingUpdates['advancedDegreeCertificateUrl'] != null) 'advancedDegreeCertificateUrl': pendingUpdates['advancedDegreeCertificateUrl'],
+                                                      if (pendingUpdates['identityUrl'] != null) 'identityUrl': pendingUpdates['identityUrl'],
+                                                      if (pendingUpdates['experienceCertificateUrl'] != null) 'experienceCertificateUrl': pendingUpdates['experienceCertificateUrl'],
+                                                      'status': 'approved',
+                                                      'accountStatus': 'approved',
+                                                      'isAvailable': true,
+                                                      'pendingProfileUpdates': FieldValue.delete(),
+                                                    });
+                                                  },
+                                                ),
+                                                const SizedBox(width: 8),
+                                                ElevatedButton.icon(
+                                                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+                                                  icon: const Icon(Icons.cancel, size: 16),
+                                                  label: const Text('رفض التعديلات'),
+                                                  onPressed: () async {
+                                                    await FirebaseFirestore.instance.collection('users').doc(docId).update({
+                                                      'status': 'approved',
+                                                      'accountStatus': 'approved',
+                                                      'isAvailable': true,
+                                                      'pendingProfileUpdates': FieldValue.delete(),
+                                                    });
+                                                  },
+                                                ),
+                                              ] else if (isPendingTeacher) ...[
+                                                ElevatedButton.icon(
+                                                  style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
+                                                  icon: const Icon(Icons.check, size: 16),
+                                                  label: const Text('قبول المعلم'),
+                                                  onPressed: () async {
+                                                    await FirebaseFirestore.instance.collection('users').doc(docId).update({
+                                                      'role': 'teacher',
+                                                      'status': 'approved',
+                                                      'accountStatus': 'approved',
+                                                      'isAvailable': true,
+                                                    });
+                                                  },
+                                                ),
+                                                const SizedBox(width: 8),
+                                                ElevatedButton.icon(
+                                                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+                                                  icon: const Icon(Icons.cancel, size: 16),
+                                                  label: const Text('رفض المعلم'),
+                                                  onPressed: () => _confirmDelete(docId: docId, collection: 'users', title: 'طلب انضمام: ${data['name'] ?? "معلم"}'),
+                                                ),
+                                              ] else ...[
+                                                IconButton(
+                                                  icon: const Icon(Icons.edit, color: Colors.blue),
+                                                  onPressed: () => _showUserFormDialog(docId: docId, initialData: data),
+                                                ),
+                                                IconButton(
+                                                  icon: const Icon(Icons.delete, color: Colors.red),
+                                                  onPressed: () => _confirmDelete(docId: docId, collection: 'users', title: data['name'] ?? 'المستخدم'),
+                                                ),
+                                              ]
+                                            ],
+                                          )
+                                        ],
                                       ),
-                                      const SizedBox(width: 8),
-                                      ElevatedButton.icon(
-                                        style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
-                                        icon: const Icon(Icons.cancel, size: 16),
-                                        label: const Text('رفض المعلم'),
-                                        onPressed: () => _confirmDelete(docId: docId, collection: 'users', title: 'طلب انضمام: ${data['name'] ?? "معلم"}'),
-                                      ),
-                                    ] else ...[
-                                      IconButton(
-                                        icon: const Icon(Icons.edit, color: Colors.blue),
-                                        onPressed: () => _showUserFormDialog(docId: docId, initialData: data),
-                                      ),
-                                      IconButton(
-                                        icon: const Icon(Icons.delete, color: Colors.red),
-                                        onPressed: () => _confirmDelete(docId: docId, collection: 'users', title: data['name'] ?? 'المستخدم'),
-                                      ),
-                                    ]
+                                    )
                                   ],
-                                )
-                              ],
-                            ),
-                          )
-                        ],
+                                ),
+                              );
+                            },
+                          );
+                        },
                       ),
-                    );
-                  },
+                    ),
+                  ],
                 );
               },
             ),
