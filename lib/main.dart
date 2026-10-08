@@ -259,6 +259,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
   String _userFilter = 'all'; // فلتر الحسابات
   String _sessionFilter = 'pending'; // فلتر الجلسات (4 أقسام)
   String _rechargeFilter = 'pending'; // فلتر الشحن (معلقة أو معبأ)
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
 
   @override
   void initState() {
@@ -1230,6 +1232,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
 
   // 2. إدارة المستخدمين والأدوار (تم الإصلاح: إظهار الشهادة دائماً بجانب الهوية)
   // 2. إدارة المستخدمين والأدوار (تم الإصلاح: تقسيم المعلمين لثلاثة أقسام مع شارات التنبيه)
+  // 2. إدارة المستخدمين والأدوار (تم التحديث: بحث + أقسام اللغة والشهادات)
   Widget _buildUserManagementTab() {
     return Padding(
       padding: const EdgeInsets.all(24.0),
@@ -1249,7 +1252,30 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
             ],
           ),
           const SizedBox(height: 16),
-          // ✨ أزرار الفلترة الجديدة مع الشارات (Badges)
+          // ✨ حقل البحث الجديد
+          TextField(
+            controller: _searchController,
+            decoration: InputDecoration(
+              labelText: 'بحث بالاسم، رقم الهاتف، أو التخصص...',
+              prefixIcon: const Icon(Icons.search, color: Color(0xFF2C3A2B)),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              suffixIcon: _searchQuery.isNotEmpty
+                  ? IconButton(
+                icon: const Icon(Icons.clear),
+                onPressed: () {
+                  _searchController.clear();
+                  setState(() => _searchQuery = '');
+                },
+              )
+                  : null,
+            ),
+            onChanged: (value) {
+              setState(() {
+                _searchQuery = value.trim().toLowerCase();
+              });
+            },
+          ),
+          const SizedBox(height: 16),
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
               stream: FirebaseFirestore.instance.collection('users').snapshots(),
@@ -1262,7 +1288,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                   return const Center(child: CircularProgressIndicator());
                 }
 
-                // ✨ حساب أعداد كل قسم لعرضها كشارات (Badges)
                 int updatesCount = 0;
                 int pendingTeachersCount = 0;
 
@@ -1279,12 +1304,15 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                   children: [
                     Wrap(
                       alignment: WrapAlignment.spaceBetween,
-                      spacing: 16,
-                      runSpacing: 12,
+                      spacing: 8,
+                      runSpacing: 8,
                       children: [
                         FilterChip(label: const Text('الكل'), selected: _userFilter == 'all', onSelected: (v) => setState(() => _userFilter = 'all')),
                         FilterChip(label: const Text('طلاب'), selected: _userFilter == 'students', onSelected: (v) => setState(() => _userFilter = 'students')),
-                        FilterChip(label: const Text('معلمين مقبولين'), selected: _userFilter == 'teachers_approved', onSelected: (v) => setState(() => _userFilter = 'teachers_approved')),
+                        FilterChip(label: const Text('معلمون عرب'), selected: _userFilter == 'teachers_ar', onSelected: (v) => setState(() => _userFilter = 'teachers_ar')),
+                        FilterChip(label: const Text('معلمون انترناشونال'), selected: _userFilter == 'teachers_en', onSelected: (v) => setState(() => _userFilter = 'teachers_en')),
+                        FilterChip(label: const Text('معلمون (كلاهما)'), selected: _userFilter == 'teachers_both', onSelected: (v) => setState(() => _userFilter = 'teachers_both')),
+                        FilterChip(label: const Text('معلمون شهادات عليا'), selected: _userFilter == 'teachers_adv', onSelected: (v) => setState(() => _userFilter = 'teachers_adv')),
                         Badge(
                           label: Text('$pendingTeachersCount', style: const TextStyle(color: Colors.white, fontSize: 10)),
                           isLabelVisible: pendingTeachersCount > 0,
@@ -1315,15 +1343,36 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                             return const Center(child: Text('لا يوجد مستخدمون حالياً في قاعدة البيانات.'));
                           }
 
-                          // ✨ فلترة القائمة بناءً على الاختيار
                           var docs = snapshot.data!.docs.where((doc) {
                             final data = doc.data() as Map<String, dynamic>;
                             final role = data['role'] ?? 'student';
                             final status = data['status'] ?? 'approved';
+                            final teachingLang = data['teachingLanguage'] ?? 'العربية';
+                            final academicDeg = data['academicDegree'] ?? 'لا أملك';
+                            final isApprovedTeacher = role == 'teacher' && status == 'approved';
+                            final hasAdvDegree = academicDeg == 'ماجستير' || academicDeg == 'دكتوراه';
 
+                            // 1. فلترة البحث
+                            if (_searchQuery.isNotEmpty) {
+                              final name = (data['name'] ?? '').toString().toLowerCase();
+                              final phone = (data['phone'] ?? '').toString().toLowerCase();
+                              final subjectsList = data['subjects'] as List<dynamic>? ?? [];
+                              final subjects = subjectsList.map((e) => e.toString().toLowerCase()).join(' ');
+
+                              if (!name.contains(_searchQuery) &&
+                                  !phone.contains(_searchQuery) &&
+                                  !subjects.contains(_searchQuery)) {
+                                return false;
+                              }
+                            }
+
+                            // 2. فلترة الأقسام
                             if (_userFilter == 'all') return true;
                             if (_userFilter == 'students') return role == 'student';
-                            if (_userFilter == 'teachers_approved') return role == 'teacher' && status == 'approved';
+                            if (_userFilter == 'teachers_ar') return isApprovedTeacher && teachingLang == 'العربية';
+                            if (_userFilter == 'teachers_en') return isApprovedTeacher && teachingLang == 'الإنجليزية (انترناشونال)';
+                            if (_userFilter == 'teachers_both') return isApprovedTeacher && teachingLang == 'كلاهما';
+                            if (_userFilter == 'teachers_adv') return isApprovedTeacher && hasAdvDegree;
                             if (_userFilter == 'teachers_pending') return role == 'teacher' && (status == 'pending_approval' || status == 'pending_review');
                             if (_userFilter == 'teachers_updates') return status == 'pending_profile_update';
 
@@ -1342,7 +1391,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                           });
 
                           if (docs.isEmpty) {
-                            return Center(child: Text('لا يوجد مستخدمون في قسم "$_userFilter" حالياً.'));
+                            return const Center(child: Text('لا توجد نتائج مطابقة للبحث أو القسم المختار.'));
                           }
 
                           return ListView.builder(
