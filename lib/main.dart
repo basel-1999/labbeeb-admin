@@ -4,6 +4,13 @@ import 'package:go_router/go_router.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'teacher_actions.dart';
+import 'session_details.dart';
+import 'system_logs.dart';
+import 'recharge_panel.dart';
+
+// رسالة بتظهر بشاشة الدخول (مثلاً: الحساب ما إله صلاحية)
+final ValueNotifier<String?> adminLoginNotice = ValueNotifier<String?>(null);
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -105,7 +112,7 @@ class _AdminAuthWrapperState extends State<AdminAuthWrapper> {
         }
 
         if (snapshot.hasData && snapshot.data != null) {
-          return const AdminDashboardScreen();
+          return RoleGate(key: ValueKey(snapshot.data!.uid), user: snapshot.data!);
         }
 
         return const AdminLoginScreen();
@@ -114,7 +121,70 @@ class _AdminAuthWrapperState extends State<AdminAuthWrapper> {
   }
 }
 
-// 🔑 شاشة تسجيل دخول المدير
+// 🚦 بعد تسجيل الدخول: بنقرأ دور المستخدم ونوجّهه (أدمن أو مسؤول مالي)، وغيرهم بنطلّعهم
+class RoleGate extends StatefulWidget {
+  final User user;
+  const RoleGate({super.key, required this.user});
+
+  @override
+  State<RoleGate> createState() => _RoleGateState();
+}
+
+class _RoleGateState extends State<RoleGate> {
+  late final Future<String?> _roleFuture = _loadRole();
+
+  Future<String?> _loadRole() async {
+    final doc = await FirebaseFirestore.instance.collection('users').doc(widget.user.uid).get();
+    final data = doc.data();
+    return data == null ? null : data['role'] as String?;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<String?>(
+      future: _roleFuture,
+      builder: (context, snap) {
+        if (snap.connectionState != ConnectionState.done) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator(color: Color(0xFF2C3A2B))),
+          );
+        }
+        if (snap.hasError) {
+          return Scaffold(
+            body: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('تعذر التحقق من صلاحياتك: ${snap.error}'),
+                  const SizedBox(height: 12),
+                  ElevatedButton(
+                    onPressed: () => FirebaseAuth.instance.signOut(),
+                    child: const Text('تسجيل الخروج'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+
+        final role = snap.data;
+        if (role == 'admin') return const AdminDashboardScreen();
+        if (role == 'finance') return const FinanceDashboardScreen();
+
+        // دور غير مسموح: تسجيل خروج مع رسالة بشاشة الدخول
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          adminLoginNotice.value = 'عذراً، هذا الحساب لا يملك صلاحية دخول لوحة الإدارة.';
+          FirebaseAuth.instance.signOut();
+        });
+        return const Scaffold(
+          body: Center(child: CircularProgressIndicator(color: Color(0xFF2C3A2B))),
+        );
+      },
+    );
+  }
+}
+
+// 🔑 شاشة تسجيل دخول الإدارة (الأدمن والمسؤول المالي)
 class AdminLoginScreen extends StatefulWidget {
   const AdminLoginScreen({super.key});
 
@@ -126,48 +196,58 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _isLoading = false;
+  bool _obscure = true;
   String? _errorMessage;
 
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  String _authErrorText(FirebaseAuthException e) {
+    switch (e.code) {
+      case 'invalid-email':
+        return 'صيغة البريد الإلكتروني غير صحيحة.';
+      case 'user-not-found':
+      case 'wrong-password':
+      case 'invalid-credential':
+        return 'البريد الإلكتروني أو كلمة المرور غير صحيحة.';
+      case 'user-disabled':
+        return 'تم تعطيل هذا الحساب.';
+      case 'too-many-requests':
+        return 'محاولات كثيرة. انتظر قليلاً ثم حاول مرة أخرى.';
+      case 'network-request-failed':
+        return 'تعذر الاتصال بالإنترنت.';
+      default:
+        return 'فشل تسجيل الدخول (${e.code}).';
+    }
+  }
+
   Future<void> _loginAdmin() async {
+    if (_isLoading) return;
     final email = _emailController.text.trim();
-    final password = _passwordController.text.trim();
+    final password = _passwordController.text;
 
     if (email.isEmpty || password.isEmpty) {
       setState(() => _errorMessage = 'يرجى إدخال البريد الإلكتروني وكلمة المرور.');
       return;
     }
 
+    adminLoginNotice.value = null;
     setState(() {
       _isLoading = true;
       _errorMessage = null;
     });
 
     try {
-      UserCredential userCredential = await FirebaseAuth.instance.signInWithEmailAndPassword(
-        email: email,
-        password: password,
-      );
-      final userDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(userCredential.user!.uid)
-          .get();
-
-      if (userDoc.exists && userDoc.data()?['role'] == 'admin') {
-        // تم تسجيل الدخول بنجاح كمدير
-      } else {
-        await FirebaseAuth.instance.signOut();
-        setState(() {
-          _errorMessage = 'عذراً، هذا الحساب لا يملك صلاحيات مدير النظام (Admin).';
-        });
-      }
+      await FirebaseAuth.instance.signInWithEmailAndPassword(email: email, password: password);
+      // التحقق من الدور (أدمن أو مسؤول مالي) بيصير بـ RoleGate
     } on FirebaseAuthException catch (e) {
-      setState(() {
-        _errorMessage = e.message ?? 'فشل تسجيل الدخول. تحقق من البيانات.';
-      });
+      if (mounted) setState(() => _errorMessage = _authErrorText(e));
     } catch (e) {
-      setState(() {
-        _errorMessage = 'حدث خطأ غير متوقع: $e';
-      });
+      if (mounted) setState(() => _errorMessage = 'حدث خطأ غير متوقع: $e');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -178,67 +258,92 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFF2C3A2B),
       body: Center(
-        child: Container(
-          width: 420,
-          padding: const EdgeInsets.all(32),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 12)],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.admin_panel_settings, size: 64, color: Color(0xFF2C3A2B)),
-              const SizedBox(height: 12),
-              const Text(
-                'لوحة تحكم المدير | لبيب',
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF2C3A2B)),
-              ),
-              const Text('تسجيل الدخول الآمن لمدير النظام', style: TextStyle(color: Colors.grey, fontSize: 13)),
-              const SizedBox(height: 24),
-              if (_errorMessage != null) ...[
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(8)),
-                  child: Text(_errorMessage!, style: const TextStyle(color: Colors.red, fontSize: 12)),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Container(
+            width: 420,
+            padding: const EdgeInsets.all(32),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 12)],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.admin_panel_settings, size: 64, color: Color(0xFF2C3A2B)),
+                const SizedBox(height: 12),
+                const Text(
+                  'لوحة الإدارة | لبيب',
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF2C3A2B)),
                 ),
-                const SizedBox(height: 16),
-              ],
-              TextField(
-                controller: _emailController,
-                decoration: const InputDecoration(
-                  labelText: 'البريد الإلكتروني للأدمن',
-                  prefixIcon: Icon(Icons.email),
-                  border: OutlineInputBorder(),
+                const Text('تسجيل الدخول للإدارة والمسؤول المالي', style: TextStyle(color: Colors.grey, fontSize: 13)),
+                const SizedBox(height: 24),
+                ValueListenableBuilder<String?>(
+                  valueListenable: adminLoginNotice,
+                  builder: (context, notice, _) {
+                    if (notice == null) return const SizedBox.shrink();
+                    return Container(
+                      width: double.infinity,
+                      margin: const EdgeInsets.only(bottom: 16),
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(color: Colors.orange.shade50, borderRadius: BorderRadius.circular(8)),
+                      child: Text(notice, style: TextStyle(color: Colors.orange.shade900, fontSize: 12)),
+                    );
+                  },
                 ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _passwordController,
-                obscureText: true,
-                decoration: const InputDecoration(
-                  labelText: 'كلمة المرور',
-                  prefixIcon: Icon(Icons.lock),
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 20),
-              SizedBox(
-                width: double.infinity,
-                height: 48,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF2C3A2B),
-                    foregroundColor: Colors.white,
+                if (_errorMessage != null) ...[
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(8)),
+                    child: Text(_errorMessage!, style: const TextStyle(color: Colors.red, fontSize: 12)),
                   ),
-                  onPressed: _isLoading ? null : _loginAdmin,
-                  child: _isLoading
-                      ? const CircularProgressIndicator(color: Colors.white)
-                      : const Text('تسجيل الدخول للوحة التحكم', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 16),
+                ],
+                TextField(
+                  controller: _emailController,
+                  keyboardType: TextInputType.emailAddress,
+                  textInputAction: TextInputAction.next,
+                  decoration: const InputDecoration(
+                    labelText: 'البريد الإلكتروني',
+                    prefixIcon: Icon(Icons.email),
+                    border: OutlineInputBorder(),
+                  ),
                 ),
-              )
-            ],
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _passwordController,
+                  obscureText: _obscure,
+                  onSubmitted: (_) => _loginAdmin(),
+                  decoration: InputDecoration(
+                    labelText: 'كلمة المرور',
+                    prefixIcon: const Icon(Icons.lock),
+                    border: const OutlineInputBorder(),
+                    suffixIcon: IconButton(
+                      icon: Icon(_obscure ? Icons.visibility : Icons.visibility_off),
+                      tooltip: _obscure ? 'إظهار كلمة المرور' : 'إخفاء كلمة المرور',
+                      onPressed: () => setState(() => _obscure = !_obscure),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF2C3A2B),
+                      foregroundColor: Colors.white,
+                    ),
+                    onPressed: _isLoading ? null : _loginAdmin,
+                    child: _isLoading
+                        ? const CircularProgressIndicator(color: Colors.white)
+                        : const Text('تسجيل الدخول', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  ),
+                )
+              ],
+            ),
           ),
         ),
       ),
@@ -258,14 +363,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
   late TabController _tabController;
   String _userFilter = 'all'; // فلتر الحسابات
   String _sessionFilter = 'pending'; // فلتر الجلسات (4 أقسام)
-  String _rechargeFilter = 'pending'; // فلتر الشحن (معلقة أو معبأ)
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 5, vsync: this); // 5 تبويبات
+    _tabController = TabController(length: 6, vsync: this); // 6 تبويبات
   }
 
   void _logoutAdmin() async {
@@ -560,22 +664,24 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                       'name': nameController.text.trim(),
                       'phone': phoneController.text.trim(),
                       'role': selectedRole,
-                      'status': 'approved',
-                      'accountStatus': 'approved',
                       'updatedAt': FieldValue.serverTimestamp(),
                     };
 
                     if (selectedRole == 'teacher') {
                       userData['subjects'] = infoController.text.split(',').map((e) => e.trim()).toList();
-                      userData['isAvailable'] = true;
                     } else if (selectedRole == 'student') {
                       userData['grade'] = infoController.text.trim();
                     }
 
                     if (docId == null) {
+                      // مستخدم جديد: الحالة بتنحط عند الإنشاء فقط
+                      userData['status'] = selectedRole == 'student' ? 'active' : 'approved';
+                      userData['accountStatus'] = 'approved';
+                      if (selectedRole == 'teacher') userData['isAvailable'] = true;
                       userData['createdAt'] = FieldValue.serverTimestamp();
                       await FirebaseFirestore.instance.collection('users').add(userData);
                     } else {
+                      // تعديل: ما منلمس الحالة (عشان ما يتخطى المعلم المقابلة)
                       await FirebaseFirestore.instance.collection('users').doc(docId).update(userData);
                     }
 
@@ -987,9 +1093,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
           tabs: [
             // تبويب 1: مراقبة الجودة
             StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance.collection('sessions').where('status', whereIn: ['accepted', 'in_progress']).snapshots(),
+              stream: FirebaseFirestore.instance.collection('sessions').where('status', whereIn: ['accepted', 'active', 'in_progress']).snapshots(),
               builder: (context, snapshot) {
-                int count = snapshot.data?.docs.length ?? 0;
+                int count = snapshot.data?.docs.where((d) => (d.data() as Map<String, dynamic>)['isTrialInterview'] != true).length ?? 0;
                 return Tab(
                   icon: Row(
                     mainAxisSize: MainAxisSize.min,
@@ -1010,7 +1116,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
             ),
             // تبويب 2: إدارة الحسابات
             StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance.collection('users').where('status', whereIn: ['pending_approval', 'pending_profile_update']).snapshots(),
+              stream: FirebaseFirestore.instance.collection('users').where('status', whereIn: ['pending_approval', 'pending_profile_update', 'interviewed']).snapshots(),
               builder: (context, snapshot) {
                 int count = snapshot.data?.docs.length ?? 0;
                 return Tab(
@@ -1108,6 +1214,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                 );
               },
             ),
+            // تبويب 6: سجل النظام
+            const Tab(icon: Icon(Icons.history), text: 'سجل النظام'),
           ],
         ),
       ),
@@ -1117,8 +1225,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
           _buildQualityAndStatsTab(),
           _buildUserManagementTab(),
           _buildSessionManagementTab(),
-          _buildRechargeRequestsTab(),
+          const RechargeRequestsPanel(),
           const AdminSupportTab(),
+          const SystemLogsTab(),
         ],
       ),
     );
@@ -1144,8 +1253,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
               final status = data['status'] ?? 'pending';
               final timerStartedAt = data['timerStartedAt'] as Timestamp?;
 
+              if (data['isTrialInterview'] == true) return false; // مقابلات المعلمين ما بتنعرض هون
               bool isCurrentlyLive = false;
-              if ((status == 'in_progress' || status == 'accepted') && timerStartedAt != null) {
+              if ((status == 'active' || status == 'in_progress' || status == 'accepted') && timerStartedAt != null) {
                 // ✨ التحقق من أن العداد بدأ ولم تمضِ عليه أكثر من 65 دقيقة
                 final startMs = timerStartedAt.toDate().millisecondsSinceEpoch;
                 final nowMs = DateTime.now().millisecondsSinceEpoch;
@@ -1290,6 +1400,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
 
                 int updatesCount = 0;
                 int pendingTeachersCount = 0;
+                int interviewedCount = 0;
 
                 for (var doc in snapshot.data!.docs) {
                   final data = doc.data() as Map<String, dynamic>;
@@ -1297,6 +1408,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                     updatesCount++;
                   } else if (data['role'] == 'teacher' && (data['status'] == 'pending_approval' || data['status'] == 'pending_review')) {
                     pendingTeachersCount++;
+                  } else if (data['role'] == 'teacher' && data['status'] == 'interviewed') {
+                    interviewedCount++;
                   }
                 }
 
@@ -1321,6 +1434,21 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                             label: const Text('معلمين قيد المراجعة'),
                             selected: _userFilter == 'teachers_pending',
                             onSelected: (v) => setState(() => _userFilter = 'teachers_pending'),
+                          ),
+                        ),
+                        FilterChip(
+                          label: const Text('معلمون تجريبيون (بانتظار المقابلة)'),
+                          selected: _userFilter == 'teachers_trial',
+                          onSelected: (v) => setState(() => _userFilter = 'teachers_trial'),
+                        ),
+                        Badge(
+                          label: Text('$interviewedCount', style: const TextStyle(color: Colors.white, fontSize: 10)),
+                          isLabelVisible: interviewedCount > 0,
+                          backgroundColor: Colors.teal,
+                          child: FilterChip(
+                            label: const Text('معلمون تمت مقابلتهم'),
+                            selected: _userFilter == 'teachers_interviewed',
+                            onSelected: (v) => setState(() => _userFilter = 'teachers_interviewed'),
                           ),
                         ),
                         Badge(
@@ -1374,6 +1502,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                             if (_userFilter == 'teachers_both') return isApprovedTeacher && teachingLang == 'كلاهما';
                             if (_userFilter == 'teachers_adv') return isApprovedTeacher && hasAdvDegree;
                             if (_userFilter == 'teachers_pending') return role == 'teacher' && (status == 'pending_approval' || status == 'pending_review');
+                            if (_userFilter == 'teachers_trial') return role == 'teacher' && status == 'trial';
+                            if (_userFilter == 'teachers_interviewed') return role == 'teacher' && status == 'interviewed';
                             if (_userFilter == 'teachers_updates') return status == 'pending_profile_update';
 
                             return false;
@@ -1401,9 +1531,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                               final docId = docs[index].id;
                               final role = data['role'] ?? 'student';
                               final status = data['status'] ?? data['accountStatus'] ?? 'approved';
-                              final isAvailable = data['isAvailable'] == true;
                               final isPendingTeacher = role == 'teacher' &&
-                                  (status == 'pending_approval' || status == 'pending' || status == 'pending_review' || !isAvailable);
+                                  (status == 'pending_approval' || status == 'pending' || status == 'pending_review');
+                              final isTrialTeacher = role == 'teacher' && status == 'trial';
+                              final isInterviewedTeacher = role == 'teacher' && status == 'interviewed';
 
                               final pendingUpdates = data['pendingProfileUpdates'] as Map<String, dynamic>?;
                               final isPendingUpdate = status == 'pending_profile_update' && pendingUpdates != null;
@@ -1419,7 +1550,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                               }
 
                               return Card(
-                                color: isPendingUpdate ? Colors.purple.shade50 : (isPendingTeacher ? Colors.orange.shade50 : Colors.white),
+                                color: isPendingUpdate
+                                    ? Colors.purple.shade50
+                                    : (isPendingTeacher
+                                    ? Colors.orange.shade50
+                                    : (isInterviewedTeacher ? Colors.teal.shade50 : Colors.white)),
                                 margin: const EdgeInsets.only(bottom: 12),
                                 child: ExpansionTile(
                                   leading: CircleAvatar(
@@ -1428,28 +1563,41 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                                         : (role == 'admin' ? Colors.purple : const Color(0xFFE07A5F)),
                                     child: Text(role.isNotEmpty ? role[0].toUpperCase() : 'U', style: const TextStyle(color: Colors.white)),
                                   ),
-                                  title: Row(
+                                  title: Wrap(
+                                    spacing: 8,
+                                    runSpacing: 6,
+                                    crossAxisAlignment: WrapCrossAlignment.center,
                                     children: [
                                       Text('${data['name'] ?? 'مستخدم جديد'} (الدور: $role)'),
-                                      if (isPendingTeacher) ...[
-                                        const SizedBox(width: 8),
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                          decoration: BoxDecoration(color: Colors.orange, borderRadius: BorderRadius.circular(12)),
-                                          child: const Text('طلب انضمام معلم معلق ⏳', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                                      if (isPendingTeacher) adminStatusBadge('طلب انضمام معلم معلق ⏳', Colors.orange),
+                                      if (isPendingUpdate) adminStatusBadge('طلب تعديل بيانات ⏳', Colors.purple),
+                                      if (isTrialTeacher) adminStatusBadge('معلم تجريبي: بانتظار المقابلة', Colors.blueGrey),
+                                      if (role == 'teacher' && status == 'approved') adminStatusBadge('معلم معتمد ✅', Colors.green),
+                                      if (isInterviewedTeacher) ...[
+                                        adminStatusBadge('تمت المقابلة: بانتظار قرارك', Colors.teal),
+                                        InterviewActionButtons(
+                                          teacherId: docId,
+                                          teacherName: (data['name'] ?? 'المعلم').toString(),
+                                          videoUrl: data['interviewVideoUrl']?.toString(),
                                         ),
                                       ],
-                                      if (isPendingUpdate) ...[
-                                        const SizedBox(width: 8),
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                          decoration: BoxDecoration(color: Colors.purple, borderRadius: BorderRadius.circular(12)),
-                                          child: const Text('طلب تعديل بيانات ⏳', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
-                                        ),
-                                      ]
                                     ],
                                   ),
-                                  subtitle: Text('الهاتف: ${data['phone'] ?? 'غير محدد'}'),
+                                  subtitle: Wrap(
+                                    spacing: 12,
+                                    crossAxisAlignment: WrapCrossAlignment.center,
+                                    children: [
+                                      Text('الهاتف: ${data['phone'] ?? 'غير محدد'}'),
+                                      if ((data['email'] ?? '').toString().isNotEmpty) Text('البريد: ${data['email']}'),
+                                      if (role == 'teacher')
+                                        TextButton.icon(
+                                          style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(0, 24)),
+                                          icon: const Icon(Icons.edit, size: 14),
+                                          label: const Text('تعديل الرقم', style: TextStyle(fontSize: 12)),
+                                          onPressed: () => editTeacherPhone(context, docId, (data['phone'] ?? '').toString()),
+                                        ),
+                                    ],
+                                  ),
                                   children: [
                                     Padding(
                                       padding: const EdgeInsets.all(16.0),
@@ -1538,8 +1686,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                                                 ),
                                             ],
                                           ] else if (role == 'student') ...[
-                                            Text('المرحلة الدراسية: ${data['grade'] ?? 'غير محدد'}', style: const TextStyle(fontSize: 13)),
-                                            Text('الرصيد: ${data['points'] ?? 0} نقطة', style: const TextStyle(fontSize: 13)),
+                                            buildStudentAdminInfo(context, docId, data),
                                           ],
                                           const SizedBox(height: 12),
                                           Row(
@@ -1589,22 +1736,35 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                                                 ElevatedButton.icon(
                                                   style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
                                                   icon: const Icon(Icons.check, size: 16),
-                                                  label: const Text('قبول المعلم'),
-                                                  onPressed: () async {
-                                                    await FirebaseFirestore.instance.collection('users').doc(docId).update({
-                                                      'role': 'teacher',
-                                                      'status': 'approved',
-                                                      'accountStatus': 'approved',
-                                                      'isAvailable': true,
-                                                    });
-                                                  },
+                                                  label: const Text('قبول التسجيل (معلم تجريبي)'),
+                                                  onPressed: () => approveTeacherRegistration(context, docId, (data['name'] ?? 'المعلم').toString()),
                                                 ),
                                                 const SizedBox(width: 8),
                                                 ElevatedButton.icon(
                                                   style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
                                                   icon: const Icon(Icons.cancel, size: 16),
-                                                  label: const Text('رفض المعلم'),
-                                                  onPressed: () => _confirmDelete(docId: docId, collection: 'users', title: 'طلب انضمام: ${data['name'] ?? "معلم"}'),
+                                                  label: const Text('رفض وحذف الحساب'),
+                                                  onPressed: () => deleteTeacherAccount(context, docId, (data['name'] ?? 'المعلم').toString()),
+                                                ),
+                                              ] else if (isTrialTeacher) ...[
+                                                const Flexible(
+                                                  child: Padding(
+                                                    padding: EdgeInsets.symmetric(horizontal: 12),
+                                                    child: Text('بانتظار أن يُجري المعلم مقابلته التجريبية', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                                                  ),
+                                                ),
+                                                ElevatedButton.icon(
+                                                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+                                                  icon: const Icon(Icons.delete_forever, size: 16),
+                                                  label: const Text('حذف المعلم'),
+                                                  onPressed: () => deleteTeacherAccount(context, docId, (data['name'] ?? 'المعلم').toString()),
+                                                ),
+                                              ] else if (isInterviewedTeacher) ...[
+                                                const Flexible(
+                                                  child: Text(
+                                                    'أزرار (عرض الفيديو، توثيق، إعادة المقابلة، حذف) بجانب اسم المعلم بالأعلى',
+                                                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                                                  ),
                                                 ),
                                               ] else ...[
                                                 IconButton(
@@ -1667,6 +1827,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
               FilterChip(label: const Text('نشطة'), selected: _sessionFilter == 'active', onSelected: (v) => setState(() => _sessionFilter = 'active')),
               FilterChip(label: const Text('مكتملة'), selected: _sessionFilter == 'completed', onSelected: (v) => setState(() => _sessionFilter = 'completed')),
               FilterChip(label: const Text('ملغاة'), selected: _sessionFilter == 'cancelled', onSelected: (v) => setState(() => _sessionFilter = 'cancelled')),
+              FilterChip(label: const Text('منقطعة'), selected: _sessionFilter == 'interrupted', onSelected: (v) => setState(() => _sessionFilter = 'interrupted')),
             ],
           ),
           const SizedBox(height: 16),
@@ -1678,9 +1839,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                   return const Center(child: Text('لا توجد جلسات حالياً.'));
                 }
                 var docs = snapshot.data!.docs.where((doc) {
-                  final status = (doc.data() as Map<String, dynamic>)['status'] ?? 'pending';
+                  final d = doc.data() as Map<String, dynamic>;
+                  if (d['isTrialInterview'] == true) return false; // مقابلات المعلمين لها مكان ثاني
+                  final status = d['status'] ?? 'pending';
                   if (_sessionFilter == 'active') {
-                    return ['accepted', 'in_progress'].contains(status);
+                    return ['accepted', 'active', 'in_progress'].contains(status);
                   }
                   return status == _sessionFilter;
                 }).toList();
@@ -1702,7 +1865,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                     final data = docs[index].data() as Map<String, dynamic>;
                     final docId = docs[index].id;
                     final status = data['status'] ?? 'pending';
-                    final bool isLiveOrAccepted = status == 'in_progress' || status == 'accepted';
+                    final bool isLiveOrAccepted = ['accepted', 'active', 'in_progress'].contains(status);
 
                     // ✨ كود التحقق يوضع هنا (خارج قائمة children)
                     bool isActuallyLive = false;
@@ -1730,6 +1893,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                                   const SizedBox(height: 4),
                                   Text('الطالب: ${data['studentName']} | الموعد: ${data['scheduledTime'] ?? "فوري"}'),
                                   Text('المعلم: ${data['teacherName'] ?? data['assignedTeacherName'] ?? "لم يحدد بعد"} | الحالة: $status', style: const TextStyle(color: Color(0xFFE07A5F), fontWeight: FontWeight.bold)),
+                                  const SizedBox(height: 6),
+                                  buildSessionExtras(data),
                                 ],
                               ),
                             ),
@@ -1785,185 +1950,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
     );
   }
 
-  // 4. تبويب طلبات شحن الرصيد (تم الإصلاح: حماية من النقر المزدوج + قائمة الرصيد المعبأ)
-  Widget _buildRechargeRequestsTab() {
-    return Padding(
-      padding: const EdgeInsets.all(24.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'طلبات شحن الرصيد (Recharge Requests)',
-            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF2C3A2B)),
-          ),
-          const SizedBox(height: 16),
-          // أزرار فلترة الشحن (معلقة / الرصيد المعبأ)
-          Wrap(
-            spacing: 8,
-            children: [
-              FilterChip(label: const Text('معلقة'), selected: _rechargeFilter == 'pending', onSelected: (v) => setState(() => _rechargeFilter = 'pending')),
-              FilterChip(label: const Text('الرصيد المعبأ'), selected: _rechargeFilter == 'approved', onSelected: (v) => setState(() => _rechargeFilter = 'approved')),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance
-                  .collection('recharge_requests')
-                  .where('status', isEqualTo: _rechargeFilter)
-                  .snapshots(),
-              builder: (context, snapshot) {
-                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                  return Center(child: Text(_rechargeFilter == 'pending' ? 'لا توجد طلبات شحن معلقة حالياً.' : 'لا يوجد رصيد معبأ مسبقاً.'));
-                }
-
-                final docs = snapshot.data!.docs.toList();
-                docs.sort((a, b) {
-                  final aTime = (a.data() as Map<String, dynamic>)['createdAt'] as Timestamp?;
-                  final bTime = (b.data() as Map<String, dynamic>)['createdAt'] as Timestamp?;
-                  if (aTime == null && bTime == null) return 0;
-                  if (aTime == null) return 1;
-                  if (bTime == null) return -1;
-                  return bTime.compareTo(aTime);
-                });
-
-                return ListView.builder(
-                  itemCount: docs.length,
-                  itemBuilder: (context, index) {
-                    final data = docs[index].data() as Map<String, dynamic>;
-                    final docId = docs[index].id;
-                    final studentId = data['studentId'] ?? '';
-                    final studentName = data['studentName'] ?? 'طالب';
-                    final packageTitle = data['packageTitle'] ?? 'باقة';
-                    final pointsCount = data['pointsCount'] ?? 0;
-                    final referenceNumber = data['referenceNumber'] ?? 'لا يوجد';
-                    final receiptImageUrl = data['receiptImageUrl'] ?? '';
-
-                    return Card(
-                      margin: const EdgeInsets.only(bottom: 12),
-                      child: Padding(
-                        padding: const EdgeInsets.all(16.0),
-                        child: Row(
-                          children: [
-                            if (receiptImageUrl.isNotEmpty)
-                              InkWell(
-                                onTap: () => html.window.open(receiptImageUrl, '_blank'),
-                                child: Container(
-                                  width: 80,
-                                  height: 80,
-                                  decoration: BoxDecoration(
-                                    border: Border.all(color: Colors.grey.shade300),
-                                    borderRadius: BorderRadius.circular(8),
-                                    image: DecorationImage(
-                                      image: NetworkImage(receiptImageUrl),
-                                      fit: BoxFit.cover,
-                                    ),
-                                  ),
-                                  child: const Align(
-                                    alignment: Alignment.bottomRight,
-                                    child: Padding(
-                                      padding: EdgeInsets.all(4.0),
-                                      child: Icon(Icons.open_in_new, size: 16, color: Colors.white),
-                                    ),
-                                  ),
-                                ),
-                              )
-                            else
-                              Container(
-                                width: 80,
-                                height: 80,
-                                decoration: BoxDecoration(
-                                  color: Colors.grey[200],
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: const Icon(Icons.receipt_long, color: Colors.grey),
-                              ),
-                            const SizedBox(width: 16),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text('الطالب: $studentName', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                                  Text('الباقة: $packageTitle ($pointsCount نقطة)'),
-                                  Text('مرجع التحويل: $referenceNumber', style: const TextStyle(color: Colors.grey, fontSize: 12)),
-                                ],
-                              ),
-                            ),
-                            // ✨ إظهار الأزرار بناءً على حالة الطلب
-                            if (_rechargeFilter == 'pending')
-                              Column(
-                                children: [
-                                  IconButton(
-                                    icon: const Icon(Icons.check_circle, color: Colors.green, size: 30),
-                                    tooltip: 'قبول الشحن وإضافة النقاط للطالب',
-                                    onPressed: () async {
-                                      // ✨ نمسك مرجع ScaffoldMessenger فوراً وقبل أي await، لأن هذا العنصر
-                                      // رح يُحذف من القائمة أول ما تتغير حالة الطلب (الستريم مفلتر على pending)
-                                      // فإذا انتظرنا واستخدمنا context بعد الـ await، بيكون العنصر انحذف من الشجرة
-                                      final messenger = ScaffoldMessenger.of(context);
-
-                                      // ✨ حماية قاطعة من النقر المزدوج
-                                      final reqRef = FirebaseFirestore.instance.collection('recharge_requests').doc(docId);
-                                      final reqSnap = await reqRef.get();
-                                      if (reqSnap.exists && reqSnap.data()?['status'] == 'approved') {
-                                        messenger.showSnackBar(
-                                          const SnackBar(content: Text('تمت الموافقة على هذا الطلب مسبقاً'), backgroundColor: Colors.orange),
-                                        );
-                                        return;
-                                      }
-
-                                      try {
-                                        final userRef = FirebaseFirestore.instance.collection('users').doc(studentId);
-                                        final userSnap = await userRef.get();
-
-                                        num currentPoints = 0;
-                                        if (userSnap.exists) {
-                                          final userData = userSnap.data() as Map<String, dynamic>;
-                                          final dynamic rawPoints = userData['points'];
-                                          currentPoints = (rawPoints is num) ? rawPoints : 0;
-                                        }
-
-                                        await userRef.update({
-                                          'points': currentPoints + pointsCount,
-                                        });
-
-                                        await reqRef.update({
-                                          'status': 'approved',
-                                          'approvedAt': FieldValue.serverTimestamp(),
-                                        });
-
-                                        messenger.showSnackBar(
-                                          SnackBar(content: Text('✅ تم شحن $pointsCount نقطة للطالب $studentName بنجاح!')),
-                                        );
-                                      } catch (e) {
-                                        messenger.showSnackBar(
-                                          SnackBar(content: Text('❌ خطأ في الشحن: $e'), backgroundColor: Colors.red),
-                                        );
-                                      }
-                                    },
-                                  ),
-                                  IconButton(
-                                    icon: const Icon(Icons.cancel, color: Colors.red, size: 30),
-                                    tooltip: 'رفض الطلب وحذفه',
-                                    onPressed: () => _confirmDelete(docId: docId, collection: 'recharge_requests', title: 'طلب شحن: $studentName'),
-                                  ),
-                                ],
-                              )
-                            else
-                              const Icon(Icons.check_circle, color: Colors.green, size: 30),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
-                );
-              },
-            ),
-          )
-        ],
-      ),
-    );
-  }
 
   // بطاقة الإحصائيات
   Widget _buildStatCard(String title, String value, Color color, IconData icon) {
