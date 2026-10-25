@@ -131,18 +131,17 @@ class RoleGate extends StatefulWidget {
 }
 
 class _RoleGateState extends State<RoleGate> {
-  late final Future<String?> _roleFuture = _loadRole();
+  late final Future<Map<String, dynamic>?> _profileFuture = _loadProfile();
 
-  Future<String?> _loadRole() async {
+  Future<Map<String, dynamic>?> _loadProfile() async {
     final doc = await FirebaseFirestore.instance.collection('users').doc(widget.user.uid).get();
-    final data = doc.data();
-    return data == null ? null : data['role'] as String?;
+    return doc.data();
   }
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<String?>(
-      future: _roleFuture,
+    return FutureBuilder<Map<String, dynamic>?>(
+      future: _profileFuture,
       builder: (context, snap) {
         if (snap.connectionState != ConnectionState.done) {
           return const Scaffold(
@@ -167,8 +166,13 @@ class _RoleGateState extends State<RoleGate> {
           );
         }
 
-        final role = snap.data;
-        if (role == 'admin') return const AdminDashboardScreen();
+        final profile = snap.data;
+        final role = profile?['role'];
+
+        // أدمن: كل التبويبات، وتبويب الشحن فقط لمن أعطاه صاحب المنصة صلاحية canRecharge
+        if (role == 'admin') {
+          return AdminDashboardScreen(canRecharge: profile?['canRecharge'] == true);
+        }
         if (role == 'finance') return const FinanceDashboardScreen();
 
         // دور غير مسموح: تسجيل خروج مع رسالة بشاشة الدخول
@@ -353,7 +357,8 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
 
 // 🖥️ شاشة لوحة التحكم الرئيسية بعد تسجيل الدخول
 class AdminDashboardScreen extends StatefulWidget {
-  const AdminDashboardScreen({super.key});
+  final bool canRecharge;
+  const AdminDashboardScreen({super.key, this.canRecharge = false});
 
   @override
   State<AdminDashboardScreen> createState() => _AdminDashboardScreenState();
@@ -369,7 +374,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 6, vsync: this); // 6 تبويبات
+    _tabController = TabController(length: widget.canRecharge ? 6 : 5, vsync: this); // 6 مع الشحن، و5 بدونه
   }
 
   void _logoutAdmin() async {
@@ -1160,8 +1165,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                 );
               },
             ),
-            // تبويب 4: شحن الرصيد
-            StreamBuilder<QuerySnapshot>(
+            // تبويب 4: شحن الرصيد (بيظهر فقط لمن عنده صلاحية canRecharge)
+            if (widget.canRecharge)
+              StreamBuilder<QuerySnapshot>(
               stream: FirebaseFirestore.instance.collection('recharge_requests').where('status', isEqualTo: 'pending').snapshots(),
               builder: (context, snapshot) {
                 int count = snapshot.data?.docs.length ?? 0;
@@ -1225,7 +1231,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
           _buildQualityAndStatsTab(),
           _buildUserManagementTab(),
           _buildSessionManagementTab(),
-          const RechargeRequestsPanel(),
+          if (widget.canRecharge) const RechargeRequestsPanel(),
           const AdminSupportTab(),
           const SystemLogsTab(),
         ],
