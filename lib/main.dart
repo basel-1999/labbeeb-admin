@@ -8,6 +8,7 @@ import 'teacher_actions.dart';
 import 'session_details.dart';
 import 'system_logs.dart';
 import 'recharge_panel.dart';
+import 'admin_api.dart';
 
 // رسالة بتظهر بشاشة الدخول (مثلاً: الحساب ما إله صلاحية)
 final ValueNotifier<String?> adminLoginNotice = ValueNotifier<String?>(null);
@@ -427,6 +428,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
     final emailController = TextEditingController();
     final passwordController = TextEditingController();
     final confirmPasswordController = TextEditingController();
+    // تعديل حساب موجود (للسوبر أدمن فقط): كلمة مرور/إيميل جديدين (اختياري)
+    final editPasswordController = TextEditingController();
+    final editEmailController = TextEditingController();
     bool obscurePassword = true;
     bool isSaving = false;
     // القيمة 'super_admin' للواجهة فقط، وبتنحفظ role=admin + isSuperAdmin=true
@@ -519,6 +523,38 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                         border: const OutlineInputBorder(),
                       ),
                     ),
+                    if (docId != null && widget.isSuperAdmin) ...[
+                      const SizedBox(height: 16),
+                      const Divider(),
+                      const SizedBox(height: 8),
+                      const Text('🔐 بيانات الدخول (اتركها فاضية إذا ما بدك تغيّرها):', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF2C3A2B))),
+                      const SizedBox(height: 8),
+                      Text(
+                        'البريد الحالي: ${(initialData?['email'] ?? '').toString().isEmpty ? 'غير محفوظ' : initialData!['email']}',
+                        style: const TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: editEmailController,
+                        keyboardType: TextInputType.emailAddress,
+                        textDirection: TextDirection.ltr,
+                        decoration: const InputDecoration(labelText: 'بريد إلكتروني جديد', border: OutlineInputBorder()),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: editPasswordController,
+                        obscureText: obscurePassword,
+                        textDirection: TextDirection.ltr,
+                        decoration: InputDecoration(
+                          labelText: 'كلمة مرور جديدة (8 أحرف على الأقل)',
+                          border: const OutlineInputBorder(),
+                          suffixIcon: IconButton(
+                            icon: Icon(obscurePassword ? Icons.visibility_off : Icons.visibility),
+                            onPressed: () => setDialogState(() => obscurePassword = !obscurePassword),
+                          ),
+                        ),
+                      ),
+                    ],
                     if (selectedRole == 'teacher' && initialData != null) ...[
                       const SizedBox(height: 16),
                       const Divider(),
@@ -733,6 +769,20 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                       return;
                     }
 
+                    // تعديل حساب موجود: تحقق من الإيميل/الباسورد الجديدين قبل أي حفظ
+                    final newEditEmail = editEmailController.text.trim();
+                    final newEditPassword = editPasswordController.text;
+                    if (docId != null && widget.isSuperAdmin) {
+                      if (newEditEmail.isNotEmpty && (!newEditEmail.contains('@') || !newEditEmail.contains('.'))) {
+                        warn('اكتب بريد إلكتروني صحيح أو اتركه فاضي.');
+                        return;
+                      }
+                      if (newEditPassword.isNotEmpty && newEditPassword.length < 8) {
+                        warn('كلمة المرور الجديدة لازم تكون 8 أحرف على الأقل.');
+                        return;
+                      }
+                    }
+
                     final isAdminRole = selectedRole == 'admin' || selectedRole == 'super_admin';
                     final userData = <String, dynamic>{
                       'name': nameController.text.trim(),
@@ -838,11 +888,31 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                       }
                     } else {
                       // تعديل: ما منلمس الحالة (عشان ما يتخطى المعلم المقابلة)
+                      setDialogState(() => isSaving = true);
                       try {
                         await FirebaseFirestore.instance.collection('users').doc(docId).update(userData);
+
+                        // تغيير الإيميل/الباسورد بيتم عبر السيرفر (Admin SDK): للسوبر أدمن فقط
+                        final done = <String>[];
+                        if (widget.isSuperAdmin && newEditEmail.isNotEmpty) {
+                          await callAdminApi('/api/admin/users/$docId/set-email', body: {'email': newEditEmail});
+                          done.add('البريد');
+                        }
+                        if (widget.isSuperAdmin && newEditPassword.isNotEmpty) {
+                          await callAdminApi('/api/admin/users/$docId/set-password', body: {'newPassword': newEditPassword});
+                          done.add('كلمة المرور');
+                        }
+
                         if (context.mounted) Navigator.pop(context);
+                        messenger.showSnackBar(
+                          SnackBar(
+                            content: Text(done.isEmpty ? 'تم تحديث البيانات' : 'تم تحديث البيانات وتغيير: ${done.join(' + ')}'),
+                            backgroundColor: Colors.green,
+                          ),
+                        );
                       } catch (e) {
-                        messenger.showSnackBar(SnackBar(content: Text('فشل التحديث: $e'), backgroundColor: Colors.red));
+                        messenger.showSnackBar(SnackBar(content: Text('فشل التحديث: ${cleanError(e)}'), backgroundColor: Colors.red));
+                        if (context.mounted) setDialogState(() => isSaving = false);
                       }
                     }
                   },
@@ -1582,6 +1652,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                       runSpacing: 8,
                       children: [
                         FilterChip(label: const Text('الكل'), selected: _userFilter == 'all', onSelected: (v) => setState(() => _userFilter = 'all')),
+                        FilterChip(label: const Text('الأدمنية (عادي + سوبر)'), selected: _userFilter == 'admins', onSelected: (v) => setState(() => _userFilter = 'admins')),
                         FilterChip(label: const Text('طلاب'), selected: _userFilter == 'students', onSelected: (v) => setState(() => _userFilter = 'students')),
                         FilterChip(label: const Text('معلمون عرب'), selected: _userFilter == 'teachers_ar', onSelected: (v) => setState(() => _userFilter = 'teachers_ar')),
                         FilterChip(label: const Text('معلمون انترناشونال'), selected: _userFilter == 'teachers_en', onSelected: (v) => setState(() => _userFilter = 'teachers_en')),
@@ -1657,6 +1728,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
 
                             // 2. فلترة الأقسام
                             if (_userFilter == 'all') return true;
+                            if (_userFilter == 'admins') return role == 'admin';
                             if (_userFilter == 'students') return role == 'student';
                             if (_userFilter == 'teachers_ar') return isApprovedTeacher && teachingLang == 'العربية';
                             if (_userFilter == 'teachers_en') return isApprovedTeacher && teachingLang == 'الإنجليزية (انترناشونال)';
@@ -1730,6 +1802,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                                     crossAxisAlignment: WrapCrossAlignment.center,
                                     children: [
                                       Text('${data['name'] ?? 'مستخدم جديد'} (الدور: $role)'),
+                                      if (role == 'admin' && data['isSuperAdmin'] == true) adminStatusBadge('سوبر', Colors.orange),
                                       if (isPendingTeacher) adminStatusBadge('طلب انضمام معلم معلق ⏳', Colors.orange),
                                       if (isPendingUpdate) adminStatusBadge('طلب تعديل بيانات ⏳', Colors.purple),
                                       if (isTrialTeacher) adminStatusBadge('معلم تجريبي: بانتظار المقابلة', Colors.blueGrey),
