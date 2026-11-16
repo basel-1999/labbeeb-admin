@@ -169,9 +169,9 @@ class _RoleGateState extends State<RoleGate> {
         final profile = snap.data;
         final role = profile?['role'];
 
-        // أدمن: كل التبويبات، وتبويب الشحن فقط لمن أعطاه صاحب المنصة صلاحية canRecharge
+        // أدمن عادي: كل التبويبات ما عدا الشحن. سوبر أدمن (isSuperAdmin): كل شي + إضافة مستخدمين
         if (role == 'admin') {
-          return AdminDashboardScreen(canRecharge: profile?['canRecharge'] == true);
+          return AdminDashboardScreen(isSuperAdmin: profile?['isSuperAdmin'] == true);
         }
         if (role == 'finance') return const FinanceDashboardScreen();
 
@@ -357,8 +357,11 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
 
 // 🖥️ شاشة لوحة التحكم الرئيسية بعد تسجيل الدخول
 class AdminDashboardScreen extends StatefulWidget {
-  final bool canRecharge;
-  const AdminDashboardScreen({super.key, this.canRecharge = false});
+  final bool isSuperAdmin;
+  const AdminDashboardScreen({super.key, this.isSuperAdmin = false});
+
+  // تبويب الشحن للسوبر أدمن فقط
+  bool get canRecharge => isSuperAdmin;
 
   @override
   State<AdminDashboardScreen> createState() => _AdminDashboardScreenState();
@@ -410,6 +413,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
 
   // 1. إضافة أو تعديل مستخدم
   void _showUserFormDialog({String? docId, Map<String, dynamic>? initialData}) {
+    // إضافة مستخدم جديد: للسوبر أدمن فقط (حماية إضافية غير الزر)
+    if (docId == null && !widget.isSuperAdmin) return;
     final nameController = TextEditingController(text: initialData?['name'] ?? '');
     final phoneController = TextEditingController(text: initialData?['phone'] ?? '');
     final infoController = TextEditingController(
@@ -419,7 +424,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
           : initialData['grade'] ?? '')
           : '',
     );
+    final emailController = TextEditingController();
+    final passwordController = TextEditingController();
+    final confirmPasswordController = TextEditingController();
+    bool obscurePassword = true;
+    bool isSaving = false;
+    // القيمة 'super_admin' للواجهة فقط، وبتنحفظ role=admin + isSuperAdmin=true
     String selectedRole = initialData?['role'] ?? 'student';
+    if (selectedRole == 'admin' && initialData?['isSuperAdmin'] == true) {
+      selectedRole = 'super_admin';
+    }
     showDialog(
       context: context,
       builder: (context) {
@@ -445,13 +459,47 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                       decoration: const InputDecoration(labelText: 'رقم الهاتف', border: OutlineInputBorder()),
                     ),
                     const SizedBox(height: 12),
+                    if (docId == null) ...[
+                      TextField(
+                        controller: emailController,
+                        keyboardType: TextInputType.emailAddress,
+                        textDirection: TextDirection.ltr,
+                        decoration: const InputDecoration(labelText: 'البريد الإلكتروني (للدخول)', border: OutlineInputBorder()),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: passwordController,
+                        obscureText: obscurePassword,
+                        textDirection: TextDirection.ltr,
+                        decoration: InputDecoration(
+                          labelText: 'كلمة المرور (8 أحرف على الأقل)',
+                          border: const OutlineInputBorder(),
+                          suffixIcon: IconButton(
+                            icon: Icon(obscurePassword ? Icons.visibility_off : Icons.visibility),
+                            onPressed: () => setDialogState(() => obscurePassword = !obscurePassword),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: confirmPasswordController,
+                        obscureText: obscurePassword,
+                        textDirection: TextDirection.ltr,
+                        decoration: const InputDecoration(labelText: 'تأكيد كلمة المرور', border: OutlineInputBorder()),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
                     DropdownButtonFormField<String>(
                       value: selectedRole,
                       decoration: const InputDecoration(labelText: 'الدور (User Role)', border: OutlineInputBorder()),
-                      items: const [
-                        DropdownMenuItem(value: 'student', child: Text('طالب (Student)')),
-                        DropdownMenuItem(value: 'teacher', child: Text('معلم (Teacher)')),
-                        DropdownMenuItem(value: 'admin', child: Text('مدير (Admin)')),
+                      items: [
+                        const DropdownMenuItem(value: 'student', child: Text('طالب (Student)')),
+                        const DropdownMenuItem(value: 'teacher', child: Text('معلم (Teacher)')),
+                        // أدوار الإدارة: بتظهر للسوبر أدمن فقط
+                        if (widget.isSuperAdmin) ...const [
+                          DropdownMenuItem(value: 'admin', child: Text('أدمن عادي (Admin)')),
+                          DropdownMenuItem(value: 'super_admin', child: Text('سوبر أدمن (Super Admin)')),
+                        ],
                       ],
                       onChanged: (val) {
                         if (val != null) {
@@ -662,13 +710,34 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                 ),
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF2C3A2B), foregroundColor: Colors.white),
-                  onPressed: () async {
-                    if (nameController.text.trim().isEmpty) return;
+                  onPressed: isSaving
+                      ? null
+                      : () async {
+                    final messenger = ScaffoldMessenger.of(this.context);
+                    void warn(String msg) => messenger.showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.orange));
 
+                    if (nameController.text.trim().isEmpty) {
+                      warn('اكتب الاسم الكامل.');
+                      return;
+                    }
+                    // حماية: أدوار الإدارة لا يضبطها إلا السوبر أدمن
+                    if ((selectedRole == 'admin' || selectedRole == 'super_admin') && !widget.isSuperAdmin) {
+                      warn('هذه الصلاحية للسوبر أدمن فقط.');
+                      return;
+                    }
+                    // حماية: السوبر أدمن ما يشيل صلاحية السوبر عن نفسه بالغلط
+                    if (docId != null &&
+                        docId == FirebaseAuth.instance.currentUser?.uid &&
+                        selectedRole != 'super_admin') {
+                      warn('ما بتقدر تنزّل صلاحية حسابك الحالي. سجّل بحساب سوبر أدمن آخر لتعديله.');
+                      return;
+                    }
+
+                    final isAdminRole = selectedRole == 'admin' || selectedRole == 'super_admin';
                     final userData = <String, dynamic>{
                       'name': nameController.text.trim(),
                       'phone': phoneController.text.trim(),
-                      'role': selectedRole,
+                      'role': isAdminRole ? 'admin' : selectedRole,
                       'updatedAt': FieldValue.serverTimestamp(),
                     };
 
@@ -677,22 +746,107 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                     } else if (selectedRole == 'student') {
                       userData['grade'] = infoController.text.trim();
                     }
-
-                    if (docId == null) {
-                      // مستخدم جديد: الحالة بتنحط عند الإنشاء فقط
-                      userData['status'] = selectedRole == 'student' ? 'active' : 'approved';
-                      userData['accountStatus'] = 'approved';
-                      if (selectedRole == 'teacher') userData['isAvailable'] = true;
-                      userData['createdAt'] = FieldValue.serverTimestamp();
-                      await FirebaseFirestore.instance.collection('users').add(userData);
-                    } else {
-                      // تعديل: ما منلمس الحالة (عشان ما يتخطى المعلم المقابلة)
-                      await FirebaseFirestore.instance.collection('users').doc(docId).update(userData);
+                    if (isAdminRole) {
+                      userData['isSuperAdmin'] = selectedRole == 'super_admin';
+                      // السوبر أدمن بس معه صلاحية الشحن (السيرفر بيعتمد عليها)
+                      userData['canRecharge'] = selectedRole == 'super_admin';
+                    } else if (initialData?['role'] == 'admin') {
+                      // تحويل أدمن لدور آخر: نشيل صلاحيات الإدارة
+                      userData['isSuperAdmin'] = false;
+                      userData['canRecharge'] = false;
                     }
 
-                    if (mounted) Navigator.pop(context);
+                    if (docId == null) {
+                      // ===== مستخدم جديد: لازم حساب دخول (Auth) + وثيقة Firestore بنفس الـ uid =====
+                      final email = emailController.text.trim();
+                      final password = passwordController.text;
+                      if (email.isEmpty || !email.contains('@') || !email.contains('.')) {
+                        warn('اكتب بريد إلكتروني صحيح.');
+                        return;
+                      }
+                      if (password.length < 8) {
+                        warn('كلمة المرور لازم تكون 8 أحرف على الأقل.');
+                        return;
+                      }
+                      if (password != confirmPasswordController.text) {
+                        warn('كلمتا المرور غير متطابقتين.');
+                        return;
+                      }
+
+                      setDialogState(() => isSaving = true);
+                      FirebaseApp? secondary;
+                      User? newUser;
+                      try {
+                        // تطبيق Firebase ثانوي: عشان إنشاء الحساب ما يسجّل خروج السوبر أدمن الحالي
+                        secondary = await Firebase.initializeApp(
+                          name: 'userCreator${DateTime.now().millisecondsSinceEpoch}',
+                          options: Firebase.app().options,
+                        );
+                        final secondaryAuth = FirebaseAuth.instanceFor(app: secondary);
+                        final cred = await secondaryAuth.createUserWithEmailAndPassword(email: email, password: password);
+                        newUser = cred.user;
+                        if (newUser == null) throw Exception('تعذر إنشاء حساب الدخول.');
+
+                        userData['email'] = email;
+                        userData['status'] = selectedRole == 'student' ? 'active' : 'approved';
+                        userData['accountStatus'] = 'approved';
+                        if (selectedRole == 'teacher') userData['isAvailable'] = true;
+                        userData['createdAt'] = FieldValue.serverTimestamp();
+
+                        try {
+                          await FirebaseFirestore.instance.collection('users').doc(newUser.uid).set(userData);
+                        } catch (e) {
+                          // فشل حفظ البيانات: نحذف حساب الدخول عشان ما يضل حساب يتيم
+                          try {
+                            await newUser.delete();
+                          } catch (_) {}
+                          rethrow;
+                        }
+
+                        await secondaryAuth.signOut();
+                        if (context.mounted) Navigator.pop(context);
+                        messenger.showSnackBar(
+                          SnackBar(content: Text('تم إنشاء الحساب: $email'), backgroundColor: Colors.green),
+                        );
+                      } on FirebaseAuthException catch (e) {
+                        String msg;
+                        switch (e.code) {
+                          case 'email-already-in-use':
+                            msg = 'هذا البريد مستخدم لحساب آخر.';
+                            break;
+                          case 'invalid-email':
+                            msg = 'صيغة البريد غير صحيحة.';
+                            break;
+                          case 'weak-password':
+                            msg = 'كلمة المرور ضعيفة، اختار كلمة أقوى.';
+                            break;
+                          case 'operation-not-allowed':
+                            msg = 'تسجيل الدخول بالبريد وكلمة المرور غير مفعّل بـ Firebase.';
+                            break;
+                          default:
+                            msg = 'فشل إنشاء الحساب: ${e.code}';
+                        }
+                        messenger.showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
+                        if (context.mounted) setDialogState(() => isSaving = false);
+                      } catch (e) {
+                        messenger.showSnackBar(SnackBar(content: Text('فشل إنشاء الحساب: $e'), backgroundColor: Colors.red));
+                        if (context.mounted) setDialogState(() => isSaving = false);
+                      } finally {
+                        try {
+                          await secondary?.delete();
+                        } catch (_) {}
+                      }
+                    } else {
+                      // تعديل: ما منلمس الحالة (عشان ما يتخطى المعلم المقابلة)
+                      try {
+                        await FirebaseFirestore.instance.collection('users').doc(docId).update(userData);
+                        if (context.mounted) Navigator.pop(context);
+                      } catch (e) {
+                        messenger.showSnackBar(SnackBar(content: Text('فشل التحديث: $e'), backgroundColor: Colors.red));
+                      }
+                    }
                   },
-                  child: Text(docId == null ? 'حفظ في Firestore' : 'تحديث البيانات'),
+                  child: Text(isSaving ? 'جاري الحفظ...' : (docId == null ? 'إنشاء الحساب' : 'تحديث البيانات')),
                 ),
               ],
             );
@@ -1078,7 +1232,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(color: Colors.green, borderRadius: BorderRadius.circular(12)),
-              child: Text('أدمن مسجل: ${user?.email ?? ""}', style: const TextStyle(color: Colors.white, fontSize: 11)),
+              child: Text('${widget.isSuperAdmin ? "سوبر أدمن" : "أدمن"}: ${user?.email ?? ""}', style: const TextStyle(color: Colors.white, fontSize: 11)),
             ),
           ],
         ),
@@ -1168,27 +1322,27 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
             // تبويب 4: شحن الرصيد (بيظهر فقط لمن عنده صلاحية canRecharge)
             if (widget.canRecharge)
               StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance.collection('recharge_requests').where('status', isEqualTo: 'pending').snapshots(),
-              builder: (context, snapshot) {
-                int count = snapshot.data?.docs.length ?? 0;
-                return Tab(
-                  icon: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.account_balance_wallet),
-                      if (count > 0)
-                        Container(
-                          padding: const EdgeInsets.all(4),
-                          margin: const EdgeInsets.only(left: 4),
-                          decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
-                          child: Text('$count', style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
-                        ),
-                    ],
-                  ),
-                  text: 'طلبات شحن الرصيد',
-                );
-              },
-            ),
+                stream: FirebaseFirestore.instance.collection('recharge_requests').where('status', isEqualTo: 'pending').snapshots(),
+                builder: (context, snapshot) {
+                  int count = snapshot.data?.docs.length ?? 0;
+                  return Tab(
+                    icon: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.account_balance_wallet),
+                        if (count > 0)
+                          Container(
+                            padding: const EdgeInsets.all(4),
+                            margin: const EdgeInsets.only(left: 4),
+                            decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+                            child: Text('$count', style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                          ),
+                      ],
+                    ),
+                    text: 'طلبات شحن الرصيد',
+                  );
+                },
+              ),
             // تبويب 5: الدعم الفني
             StreamBuilder<QuerySnapshot>(
               stream: FirebaseFirestore.instance.collection('support_chats').snapshots(),
@@ -1359,12 +1513,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const Text('إدارة المستخدمين والأدوار (Users Collection)', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF2C3A2B))),
-              ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF2C3A2B), foregroundColor: Colors.white),
-                icon: const Icon(Icons.person_add),
-                label: const Text('إضافة مستخدم جديد'),
-                onPressed: () => _showUserFormDialog(),
-              )
+              if (widget.isSuperAdmin)
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF2C3A2B), foregroundColor: Colors.white),
+                  icon: const Icon(Icons.person_add),
+                  label: const Text('إضافة مستخدم جديد'),
+                  onPressed: () => _showUserFormDialog(),
+                )
             ],
           ),
           const SizedBox(height: 16),
@@ -1772,6 +1927,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                                                     style: TextStyle(fontSize: 12, color: Colors.grey),
                                                   ),
                                                 ),
+                                              ] else if (role == 'admin' && !widget.isSuperAdmin) ...[
+                                                const Text('حساب إداري: التعديل والحذف للسوبر أدمن فقط', style: TextStyle(fontSize: 12, color: Colors.grey)),
                                               ] else ...[
                                                 IconButton(
                                                   icon: const Icon(Icons.edit, color: Colors.blue),
