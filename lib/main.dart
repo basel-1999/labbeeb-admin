@@ -9,7 +9,7 @@ import 'session_details.dart';
 import 'system_logs.dart';
 import 'recharge_panel.dart';
 import 'admin_api.dart';
-
+import 'teacher_details.dart';
 // رسالة بتظهر بشاشة الدخول (مثلاً: الحساب ما إله صلاحية)
 final ValueNotifier<String?> adminLoginNotice = ValueNotifier<String?>(null);
 
@@ -1922,6 +1922,30 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                                           ] else if (role == 'student') ...[
                                             buildStudentAdminInfo(context, docId, data),
                                           ],
+
+                                          // زر تفاصيل ومستحقات المعلم (ساعات، نقاط، مستحقات)
+                                          if (role == 'teacher' && !isPendingTeacher)
+                                            Padding(
+                                              padding: const EdgeInsets.only(top: 12),
+                                              child: Align(
+                                                alignment: AlignmentDirectional.centerStart,
+                                                child: OutlinedButton.icon(
+                                                  icon: const Icon(Icons.bar_chart, size: 18),
+                                                  label: const Text('تفاصيل ومستحقات المعلم'),
+                                                  onPressed: () => Navigator.push(
+                                                    context,
+                                                    MaterialPageRoute(
+                                                      builder: (_) => TeacherDetailsScreen(
+                                                        teacherId: docId,
+                                                        teacherName: (data['name'] ?? 'المعلم').toString(),
+                                                        isSuperAdmin: widget.isSuperAdmin,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+
                                           const SizedBox(height: 12),
                                           Row(
                                             mainAxisAlignment: MainAxisAlignment.end,
