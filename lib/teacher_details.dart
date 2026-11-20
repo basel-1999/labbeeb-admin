@@ -242,7 +242,7 @@ class _TeacherDetailsScreenState extends State<TeacherDetailsScreen> {
               const SizedBox(height: 12),
               TextField(
                 controller: noteC,
-                decoration: const InputDecoration(labelText: 'ملاحظة (اختياري، مثل: تحويل بنكي)', border: OutlineInputBorder()),
+                decoration: const InputDecoration(labelText: 'ملاحظة (اختياري) — بيشوفها المعلم بصفحته', border: OutlineInputBorder()),
               ),
             ],
           ),
@@ -292,7 +292,6 @@ class _TeacherDetailsScreenState extends State<TeacherDetailsScreen> {
         'teacherName': widget.teacherName,
         'paidAt': FieldValue.serverTimestamp(),
         'paidBy': user?.uid,
-        'paidByEmail': user?.email,
         'sessionIds': ids,
         'sessionsCount': ids.length,
         'regularPoints': regPoints,
@@ -651,7 +650,6 @@ class _TeacherDetailsScreenState extends State<TeacherDetailsScreen> {
                 ...data.payments.map((p) {
                   final voided = p['voided'] == true;
                   final note = (p['note'] ?? '').toString();
-                  final by = (p['paidByEmail'] ?? '').toString();
                   return Card(
                     margin: const EdgeInsets.only(bottom: 8),
                     color: voided ? Colors.grey.shade200 : Colors.white,
@@ -669,10 +667,9 @@ class _TeacherDetailsScreenState extends State<TeacherDetailsScreen> {
                       ),
                       subtitle: Text(
                         'عادي ${_num(p['regularHours']).toStringAsFixed(2)} س  •  انترناشونال ${_num(p['intlHours']).toStringAsFixed(2)} س  •  ${(p['sessionsCount'] ?? 0)} حصة'
-                            '${by.isEmpty ? '' : '\nبواسطة: $by'}'
                             '${note.isEmpty ? '' : '\nملاحظة: $note'}',
                       ),
-                      isThreeLine: by.isNotEmpty || note.isNotEmpty,
+                      isThreeLine: note.isNotEmpty,
                       trailing: voided
                           ? null
                           : TextButton(
